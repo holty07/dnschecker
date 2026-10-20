@@ -78,7 +78,7 @@ function renderTable(results) {
 function renderRuntime(runtime) {
   if (!runtime) return;
   const lines = [
-    'Node ' + runtime.node + ', listening on port ' + runtime.listeningPort +
+    'Node ' + runtime.node + ', listening on ' + runtime.listeningOn +
       (runtime.portEnv === null ? ' (PORT not set, using the default)' : ' (PORT=' + runtime.portEnv + ')'),
   ];
   lines.forEach(function (text) {

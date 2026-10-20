@@ -28,7 +28,7 @@ Every route except `/healthz` requires HTTP Basic auth. The username is `admin`.
 |---|---|---|
 | `AUTH_PASSWORD` | yes | Password for user `admin`. At least 12 characters. |
 | `LOOKUP_TIMEOUT_MS` | no | Per-resolver query timeout in milliseconds. Default 3000. |
-| `PORT` | no | Listening port. Set only if the platform does not inject it. |
+| `PORT` | no | Listening port. SiteGround sets this itself, so don't set it there. |
 
 See `.env.example`.
 
@@ -66,7 +66,8 @@ Items still marked unverified need confirming. Record the answer here once check
 - **Node version.** **Confirmed from the build log: SiteGround runs Node 22.23.2.** `engines` is `>=22`.
 - **Build steps.** **Confirmed from the build log:** the build deletes `package-lock.json` and then runs `npm install`. This project has no dependencies, so the install is a no-op.
 - **Deploy branch.** **Confirmed: `main` is the deploy branch.** Each build deploys straight to production, with no staging step.
-- **Listening port.** How does the platform pass the port to the app? Status: unverified – to confirm on deploy. The server uses `process.env.PORT`, falls back to 3000, and logs which source it used at startup.
+- **Listening port.** **Confirmed 2026-10-20 from the deployed self-test:** SiteGround sets `PORT` (it was `64321`), and the server listens on it. Don't set `PORT` yourself. The incoming connection had no local port, which in Node only happens on a Unix socket, so SiteGround probably wraps the app and redirects its listener. That is unverified: `/selftest.html` now shows the actual listener address.
+- **Logs.** Statistics > Error Log shows nginx entries, not the app's console output. Use `/selftest.html` for runtime details.
 - **Start command.** Does the platform expect `npm start` or `node server.js`? Status: unverified – to confirm on deploy. A `start` script runs `node server.js`, so either works if the platform accepts it.
 - **Behind a proxy.** Does SiteGround forward `X-Forwarded-For`? Status: unverified. Nothing keys on client IP yet, so this does not affect Phase 1.
 

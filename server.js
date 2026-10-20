@@ -74,6 +74,12 @@ async function handleLookup(req, res, { resolvers, query, timeout }) {
   sendJson(res, 200, { ...result, input: domain });
 }
 
+function describeAddress(address) {
+  if (!address) return null;
+  if (typeof address === 'string') return `Unix socket ${address}`;
+  return `port ${address.port}`;
+}
+
 function buildRoutes({ resolvers, query, timeout }) {
   return new Map([
     ['GET /healthz', async (req, res) => sendText(res, 200, 'ok')],
@@ -84,7 +90,8 @@ function buildRoutes({ resolvers, query, timeout }) {
         // How the platform runs the app, since its runtime logs are hard to reach.
         body.runtime = {
           node: process.version,
-          listeningPort: req.socket.localPort,
+          // A port number, or a path when the platform swaps the listener for a Unix socket.
+          listeningOn: describeAddress(req.socket.server && req.socket.server.address()),
           portEnv: process.env.PORT === undefined ? null : process.env.PORT,
         };
         sendJson(res, 200, body);
