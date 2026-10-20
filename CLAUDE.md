@@ -79,8 +79,8 @@ These came from reviewing `docs/PLAN.md` against Node's actual behaviour and the
 2. **Auth ships before any open query endpoint.** The plan puts auth in Phase 4, but every push to
    `main` redeploys, so `/api/lookup` would be public from Phase 1. That contradicts the
    "not exposed as an open query endpoint" goal. Basic auth (`lib/auth.js`) and the startup
-   password check move into Phase 1. Phase 0's `/api/selftest` only queries fixed targets, so it can
-   stay unauthenticated.
+   password check move into Phase 1. Every route except `/healthz` requires auth, including
+   `/api/selftest`.
 3. **PTR needs IP input.** `validate.js` rejects IP literals, but PTR lookups take an IP. Accept an
    IPv4 or IPv6 literal **only** when `type=PTR`, and convert it to its `in-addr.arpa` or
    `ip6.arpa` name.
@@ -103,7 +103,9 @@ These came from reviewing `docs/PLAN.md` against Node's actual behaviour and the
   Code cloud sandbox behaves differently (TCP 53 times out, UDP 53 is intercepted with fake
   NXDOMAIN answers), so real DNS behaviour can only be checked on the deployed instance.
 - How does SiteGround tell the app which port to listen on? Until confirmed, use
-  `process.env.PORT || 3000` and log the value at startup.
+  `process.env.PORT || 3000` and log the value at startup. SiteGround's Error Log shows nginx
+  entries, not the app's console output, so `/api/selftest` also reports the Node version, the
+  listening port and the `PORT` value under `runtime`.
 - Which Node versions can be selected in Site Tools? Set `engines` to match. Local development uses
   Node 22.
 - What start command does it expect (`npm start` or `node server.js`)? Provide both: a `start`
