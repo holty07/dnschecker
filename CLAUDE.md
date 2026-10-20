@@ -71,9 +71,11 @@ These came from reviewing `docs/PLAN.md` against Node's actual behaviour and the
    TCP-only option, and `{ ttl: true }` is honoured only by `resolve4` and `resolve6`. It also
    doesn't expose the AA flag or raw RCODEs. Plan: Phase 0 includes a minimal DNS wire-format
    client (`lib/wire.js`: build a query, parse the answer section) over `node:dgram` (UDP) and
-   `node:net` (TCP, 2-byte length prefix). If it works on SiteGround, Phases 1 and 2 may use it
-   instead of `node:dns`, so every record type gets a TTL and authoritative answers can be checked
-   for the AA flag. Decide this at the Phase 0 gate.
+   `node:net` (TCP, 2-byte length prefix).
+   **Phase 0 gate outcome (2026-10-20):** on SiteGround, outbound UDP 53 times out for every
+   resolver, but TCP 53 works (all four resolvers answered in 5 to 13 ms). So **all DNS queries go
+   over TCP via `lib/wire.js`**. Do not use `node:dns`: c-ares tries UDP first and only falls
+   back to TCP on truncation, so every query would time out.
 2. **Auth ships before any open query endpoint.** The plan puts auth in Phase 4, but every push to
    `main` redeploys, so `/api/lookup` would be public from Phase 1. That contradicts the
    "not exposed as an open query endpoint" goal. Basic auth (`lib/auth.js`) and the startup
@@ -87,17 +89,19 @@ These came from reviewing `docs/PLAN.md` against Node's actual behaviour and the
    the limiter on it.
 5. **IPv6 reachability is unknown.** If the server has no outbound IPv6, report AAAA-only
    nameservers as `unreachable`. Don't count them as disagreeing.
-6. **`lib/wire.js` sends no EDNS0 OPT record**, so UDP answers over 512 bytes come back with TC set.
-   Before Phase 1 relies on it, either add EDNS0 (4096-byte buffer) or retry over TCP when TC is set.
+6. **TCP only.** Because queries use TCP, the 512-byte UDP limit and EDNS0 don't apply (TCP
+   messages go up to 65,535 bytes). Keep UDP support in `lib/wire.js` and in `/api/selftest` so it
+   is obvious if the platform ever opens UDP. Some authoritative nameservers may not answer over
+   TCP (RFC 7766 requires them to); report those as `error`, not as disagreeing.
 7. **SPF:** besides the 10-lookup limit, also report void lookups (RFC 7208 limit of 2).
 8. **Repo name** is `dnschecker` (not `dns-checker` as in the plan). Files live at the repository
    root.
 
 ## Open questions (verify, then record the answer in README.md)
 
-- Can a SiteGround Node project make outbound UDP and TCP queries on port 53? (Phase 0 answers this.)
-  Note: in the Claude Code cloud sandbox, TCP 53 times out and UDP 53 is intercepted (fake
-  NXDOMAIN answers). It can't be tested from a session. Only the deployed instance can answer it.
+- Answered: SiteGround allows outbound TCP 53 but not UDP 53 (see decision 1). Note: the Claude
+  Code cloud sandbox behaves differently (TCP 53 times out, UDP 53 is intercepted with fake
+  NXDOMAIN answers), so real DNS behaviour can only be checked on the deployed instance.
 - How does SiteGround tell the app which port to listen on? Until confirmed, use
   `process.env.PORT || 3000` and log the value at startup.
 - Which Node versions can be selected in Site Tools? Set `engines` to match. Local development uses

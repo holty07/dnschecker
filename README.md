@@ -35,12 +35,21 @@ Environment variables: `AUTH_PASSWORD` is required from Phase 1. Set `PORT` only
 
 ## Platform findings
 
-Every item below is **unverified – to confirm on deploy**. Record the answer here once checked against SiteGround's documentation or a deployed instance.
+Items still marked unverified need confirming. Record the answer here once checked against SiteGround's documentation or a deployed instance.
 
-- **Outbound UDP and TCP port 53.** Can a SiteGround Node project query arbitrary resolvers on both transports? Status: unverified – to confirm on deploy. In the Claude Code sandbox, TCP 53 times out and UDP 53 is intercepted: every resolver "answers" NXDOMAIN for `example.com` within about 5 ms. The self-test reports that pattern as a warning, so watch for it on SiteGround too. Only the deployed `/api/selftest` can answer this. Only rows with status `ok` count as reachable.
+- **Outbound UDP and TCP port 53.** **Confirmed 2026-10-20 from the deployed `/api/selftest`:** TCP 53 works and UDP 53 does not. Every resolver timed out over UDP after 3 seconds, and every resolver answered over TCP in 5 to 13 ms. The tool therefore queries over TCP only. (For comparison, the Claude Code sandbox times out on TCP 53 and fakes NXDOMAIN answers on UDP 53, so test DNS behaviour on the deployed instance.)
 - **Listening port.** How does the platform pass the port to the app? Status: unverified – to confirm on deploy. The server uses `process.env.PORT`, falls back to 3000, and logs which source it used at startup.
 - **Node versions.** Which versions can be selected in Site Tools? Status: unverified – to confirm on deploy. `engines` is `>=20`.
 - **Start command.** Does the platform expect `npm start` or `node server.js`? Status: unverified – to confirm on deploy. A `start` script runs `node server.js`, so either works if the platform accepts it.
 - **Deploy branch.** Which branch deploys? The plan says `main`. Status: unverified – to confirm on deploy.
 
-Phase 0 self-test results: not yet recorded.
+### Phase 0 self-test results (2026-10-20)
+
+| Resolver | UDP | TCP | TCP answers | TTL | TCP ms |
+|---|---|---|---|---|---|
+| Google 8.8.8.8 | timeout | ok | 172.66.147.243, 104.20.23.154 | 300 | 12.8 |
+| Cloudflare 1.1.1.1 | timeout | ok | 104.20.23.154, 172.66.147.243 | 245 | 7.8 |
+| Quad9 9.9.9.9 | timeout | ok | 104.20.23.154, 172.66.147.243 | 83 | 5.9 |
+| OpenDNS 208.67.222.222 | timeout | ok | 104.20.23.154, 172.66.147.243 | 249 | 5.2 |
+
+Summary: UDP 0 of 4 reachable, TCP 4 of 4 reachable, no interception warnings.
