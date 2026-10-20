@@ -87,15 +87,17 @@ These came from reviewing `docs/PLAN.md` against Node's actual behaviour and the
    the limiter on it.
 5. **IPv6 reachability is unknown.** If the server has no outbound IPv6, report AAAA-only
    nameservers as `unreachable`. Don't count them as disagreeing.
-6. **SPF:** besides the 10-lookup limit, also report void lookups (RFC 7208 limit of 2).
-7. **Repo name** is `dnschecker` (not `dns-checker` as in the plan). Files live at the repository
+6. **`lib/wire.js` sends no EDNS0 OPT record**, so UDP answers over 512 bytes come back with TC set.
+   Before Phase 1 relies on it, either add EDNS0 (4096-byte buffer) or retry over TCP when TC is set.
+7. **SPF:** besides the 10-lookup limit, also report void lookups (RFC 7208 limit of 2).
+8. **Repo name** is `dnschecker` (not `dns-checker` as in the plan). Files live at the repository
    root.
 
 ## Open questions (verify, then record the answer in README.md)
 
 - Can a SiteGround Node project make outbound UDP and TCP queries on port 53? (Phase 0 answers this.)
-  Note: the Claude Code cloud sandbox blocks outbound port 53, so this can't be tested from a
-  session. Only the deployed instance can answer it.
+  Note: in the Claude Code cloud sandbox, TCP 53 times out and UDP 53 is intercepted (fake
+  NXDOMAIN answers). It can't be tested from a session. Only the deployed instance can answer it.
 - How does SiteGround tell the app which port to listen on? Until confirmed, use
   `process.env.PORT || 3000` and log the value at startup.
 - Which Node versions can be selected in Site Tools? Set `engines` to match. Local development uses
