@@ -81,6 +81,12 @@ function buildRoutes({ resolvers, query, timeout }) {
       'GET /api/selftest',
       async (req, res) => {
         const body = await selftest({ resolvers, query });
+        // How the platform runs the app, since its runtime logs are hard to reach.
+        body.runtime = {
+          node: process.version,
+          listeningPort: req.socket.localPort,
+          portEnv: process.env.PORT === undefined ? null : process.env.PORT,
+        };
         sendJson(res, 200, body);
       },
     ],
