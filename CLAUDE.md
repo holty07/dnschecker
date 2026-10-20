@@ -102,13 +102,12 @@ These came from reviewing `docs/PLAN.md` against Node's actual behaviour and the
 - Answered: SiteGround allows outbound TCP 53 but not UDP 53 (see decision 1). Note: the Claude
   Code cloud sandbox behaves differently (TCP 53 times out, UDP 53 is intercepted with fake
   NXDOMAIN answers), so real DNS behaviour can only be checked on the deployed instance.
-- How does SiteGround tell the app which port to listen on? Until confirmed, use
-  `process.env.PORT || 3000` and log the value at startup. SiteGround's Error Log shows nginx
+- Answered: SiteGround sets `PORT` (seen as 64321); keep `process.env.PORT || 3000`. The request
+  socket had no local port, so the listener is probably redirected to a Unix socket by a wrapper
+  (unverified; the self-test now reports the listener address). SiteGround's Error Log shows nginx
   entries, not the app's console output, so `/api/selftest` also reports the Node version, the
   listening port and the `PORT` value under `runtime`.
-- Which Node versions can be selected in Site Tools? Set `engines` to match. Local development uses
-  Node 22.
+- Answered: SiteGround runs Node 22.23.2; `engines` is `>=22`.
 - What start command does it expect (`npm start` or `node server.js`)? Provide both: a `start`
   script that runs `node server.js`.
-- Which branch deploys? The plan says `main`. Work happens on feature branches, so `main` must exist
-  and be the deploy branch.
+- Answered: `main` is the deploy branch, and every merge deploys straight to production.

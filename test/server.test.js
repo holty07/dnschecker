@@ -128,7 +128,7 @@ test('selftest page and /api/selftest are served with auth', async () => {
     const body = JSON.parse(api.body);
     assert.equal(body.target, 'example.com');
     assert.equal(body.runtime.node, process.version);
-    assert.equal(body.runtime.listeningPort, port);
+    assert.equal(body.runtime.listeningOn, `port ${port}`);
   });
 });
 
