@@ -6,42 +6,69 @@ It runs as a Node.js Project on SiteGround Cloud and deploys from GitHub. It has
 
 The full brief is in [docs/PLAN.md](docs/PLAN.md). Project rules are in [CLAUDE.md](CLAUDE.md).
 
-**Status:** Phase 0 (reachability spike). The only working endpoints are `/healthz` and `/api/selftest`.
+**Status:** Phase 1 (core lookup) is built. Lookups query several public resolvers in parallel and highlight answers that differ from the majority. Authoritative checks (Phase 2) and the email DNS panel (Phase 3) are not built yet.
+
+Endpoints (all need HTTP Basic auth except `/healthz`):
+
+- `/` is the lookup page. Enter a domain or IP and choose a record type, or "All common" for every common type at once.
+- `GET /api/lookup?domain=&type=` returns the per-resolver results and the consensus as JSON.
+- `/selftest.html` and `GET /api/selftest` are the Phase 0 reachability check.
+- `/healthz` returns `ok` and needs no auth.
+
+## Authentication
+
+Every route except `/healthz` requires HTTP Basic auth. The username is `admin`. The password comes from the `AUTH_PASSWORD` environment variable.
+
+- `AUTH_PASSWORD` is **required**. The server refuses to start if it is unset or shorter than 12 characters, and logs the reason to stderr.
+- Use a long random password. Browsers cache Basic credentials for the session, so sign out by closing the browser.
+
+## Environment variables
+
+| Name | Required | Purpose |
+|---|---|---|
+| `AUTH_PASSWORD` | yes | Password for user `admin`. At least 12 characters. |
+| `LOOKUP_TIMEOUT_MS` | no | Per-resolver query timeout in milliseconds. Default 3000. |
+| `PORT` | no | Listening port. Set only if the platform does not inject it. |
+
+See `.env.example`.
 
 ## Running locally
 
-Requires Node 22 for development. `engines` asks for Node 20 or later.
+Developed on Node 22. `engines` requires Node 22 or later.
 
 ```sh
-npm start    # node server.js, listens on $PORT (default 3000)
-npm test     # node --test, runs offline
+AUTH_PASSWORD='at-least-12-chars' npm start   # node server.js, listens on $PORT (default 3000)
+npm test                                      # node --test, runs offline
 ```
 
 There is no install step and no build step.
 
-## Phase 0 deployment
+## Deployment
 
 Condensed from [docs/PLAN.md](docs/PLAN.md) section 6.
 
-1. Create the GitHub repository `dnschecker` and make sure `main` exists. `main` is the deploy branch.
+1. Create the GitHub repository `dnschecker`. `main` is the deploy branch.
 2. In the SiteGround Client Area, create a Node.js Project and connect the repository and the `main` branch. Confirm the menu path in the SiteGround KB article "What is a Node.js Project?".
-3. In Site Tools > Node.js, set the Node version (pick one that is actually selectable and matches `engines`), package manager to npm, no build command, and start command `npm start` (or `node server.js`).
-4. Point a dedicated subdomain at the project. Do not host it inside a client website.
-5. Confirm HTTPS is active.
-6. Load `/healthz`, then `/api/selftest`, and record the output here.
-7. If something fails, check Site Tools > Node.js > Logs (build) and Statistics > Error Log (runtime).
+3. In Site Tools > Node.js, set the Node version to 22 (the build log shows 22.23.2), package manager to npm, no build command, and start command `npm start` (or `node server.js`).
+4. Add `AUTH_PASSWORD` (and optionally `LOOKUP_TIMEOUT_MS`) as environment variables. Where SiteGround takes them is unverified: check the Node.js project settings and record the menu path here.
+5. Point a dedicated subdomain at the project. Do not host it inside a client website.
+6. Confirm HTTPS is active.
+7. Load `/healthz`, then sign in at `/` and run `/selftest.html`.
+8. If something fails, check Site Tools > Node.js > Logs (build) and Statistics > Error Log (runtime).
 
-Environment variables: `AUTH_PASSWORD` is required from Phase 1. Set `PORT` only if the platform does not inject it. See `.env.example`.
+Every push to `main` is a production deploy. Merge only what has passed `npm test`.
 
 ## Platform findings
 
 Items still marked unverified need confirming. Record the answer here once checked against SiteGround's documentation or a deployed instance.
 
 - **Outbound UDP and TCP port 53.** **Confirmed 2026-10-20 from the deployed `/api/selftest`:** TCP 53 works and UDP 53 does not. Every resolver timed out over UDP after 3 seconds, and every resolver answered over TCP in 5 to 13 ms. The tool therefore queries over TCP only. (For comparison, the Claude Code sandbox times out on TCP 53 and fakes NXDOMAIN answers on UDP 53, so test DNS behaviour on the deployed instance.)
+- **Node version.** **Confirmed from the build log: SiteGround runs Node 22.23.2.** `engines` is `>=22`.
+- **Build steps.** **Confirmed from the build log:** the build deletes `package-lock.json` and then runs `npm install`. This project has no dependencies, so the install is a no-op.
+- **Deploy branch.** **Confirmed: `main` is the deploy branch.** Each build deploys straight to production, with no staging step.
 - **Listening port.** How does the platform pass the port to the app? Status: unverified – to confirm on deploy. The server uses `process.env.PORT`, falls back to 3000, and logs which source it used at startup.
-- **Node versions.** Which versions can be selected in Site Tools? Status: unverified – to confirm on deploy. `engines` is `>=20`.
 - **Start command.** Does the platform expect `npm start` or `node server.js`? Status: unverified – to confirm on deploy. A `start` script runs `node server.js`, so either works if the platform accepts it.
-- **Deploy branch.** Which branch deploys? The plan says `main`. Status: unverified – to confirm on deploy.
+- **Behind a proxy.** Does SiteGround forward `X-Forwarded-For`? Status: unverified. Nothing keys on client IP yet, so this does not affect Phase 1.
 
 ### Phase 0 self-test results (2026-10-20)
 
