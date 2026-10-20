@@ -1,0 +1,6 @@
+[
+  { "name": "Google", "address": "8.8.8.8" },
+  { "name": "Cloudflare", "address": "1.1.1.1" },
+  { "name": "Quad9", "address": "9.9.9.9" },
+  { "name": "OpenDNS", "address": "208.67.222.222" }
+]

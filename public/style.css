@@ -1,0 +1,153 @@
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --fg: #1b1f24;
+  --muted: #5b6470;
+  --border: #d5d9e0;
+  --button: #1d4ed8;
+  --button-fg: #ffffff;
+  --ok-bg: #d4f1dd;
+  --ok-fg: #14532d;
+  --amber-bg: #fde9c0;
+  --amber-fg: #6b4300;
+  --red-bg: #f8d4d1;
+  --red-fg: #7f1d1d;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171c;
+    --surface: #1d2229;
+    --fg: #e6e9ee;
+    --muted: #9aa3af;
+    --border: #3a424d;
+    --button: #3b82f6;
+    --button-fg: #0b1220;
+    --ok-bg: #123d24;
+    --ok-fg: #b7f0cb;
+    --amber-bg: #4a3610;
+    --amber-fg: #fbe2a6;
+    --red-bg: #4a1716;
+    --red-fg: #fbc4c0;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 16px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 1.4rem;
+  margin: 0.5em 0;
+}
+
+code,
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  word-break: break-all;
+}
+
+button {
+  font: inherit;
+  padding: 0.5em 1.1em;
+  border: 0;
+  border-radius: 6px;
+  background: var(--button);
+  color: var(--button-fg);
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+#status {
+  color: var(--muted);
+  min-height: 1.5em;
+}
+
+#summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 8px 0;
+}
+
+.summary-item {
+  margin: 0;
+  font-weight: 600;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+th,
+td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+th {
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+td.status {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.status-ok {
+  background: var(--ok-bg);
+  color: var(--ok-fg);
+}
+
+.status-amber {
+  background: var(--amber-bg);
+  color: var(--amber-fg);
+}
+
+.status-red {
+  background: var(--red-bg);
+  color: var(--red-fg);
+}
+
+.warning {
+  background: var(--amber-bg);
+  color: var(--amber-fg);
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+}
