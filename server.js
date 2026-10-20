@@ -4,9 +4,15 @@ const http = require('node:http');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { selftest } = require('./lib/selftest');
-const resolvers = require('./resolvers.json');
+const wire = require('./lib/wire');
+const { assertStrongPassword, createAuthChecker } = require('./lib/auth');
+const { validateQuery } = require('./lib/validate');
+const { lookupAll } = require('./lib/resolve');
+const DEFAULT_RESOLVERS = require('./resolvers.json');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const DEFAULT_TIMEOUT_MS = 3000;
+const REALM_HEADER = 'Basic realm="DNS Checker", charset="UTF-8"';
 
 const CONTENT_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -21,11 +27,12 @@ const SECURITY_HEADERS = {
   'X-Frame-Options': 'DENY',
 };
 
-function sendJson(res, status, body) {
+function sendJson(res, status, body, extraHeaders = {}) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(payload),
+    ...extraHeaders,
   });
   res.end(payload);
 }
@@ -38,18 +45,51 @@ function sendText(res, status, text) {
   res.end(text);
 }
 
-const routes = new Map([
-  ['GET /healthz', async (req, res) => sendText(res, 200, 'ok')],
-  [
-    'GET /api/selftest',
-    async (req, res) => {
-      // Loaded lazily so the server (and its tests) do not depend on lib/wire.js.
-      const { query } = require('./lib/wire');
-      const body = await selftest({ resolvers, query });
-      sendJson(res, 200, body);
-    },
-  ],
-]);
+function parseTimeout(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_TIMEOUT_MS;
+}
+
+async function handleLookup(req, res, { resolvers, query, timeout }) {
+  const url = new URL(req.url, 'http://localhost');
+  const domain = url.searchParams.get('domain');
+  const type = url.searchParams.get('type');
+  if (domain === null) return sendJson(res, 400, { error: 'domain is required' });
+
+  let checked;
+  try {
+    checked = validateQuery(domain, type);
+  } catch (err) {
+    if (err && err.code === 'EINVALID') return sendJson(res, 400, { error: err.message });
+    throw err;
+  }
+
+  const result = await lookupAll({
+    resolvers,
+    name: checked.name,
+    type: checked.type,
+    query,
+    timeout,
+  });
+  sendJson(res, 200, { ...result, input: domain });
+}
+
+function buildRoutes({ resolvers, query, timeout }) {
+  return new Map([
+    ['GET /healthz', async (req, res) => sendText(res, 200, 'ok')],
+    [
+      'GET /api/selftest',
+      async (req, res) => {
+        const body = await selftest({ resolvers, query });
+        sendJson(res, 200, body);
+      },
+    ],
+    [
+      'GET /api/lookup',
+      async (req, res) => handleLookup(req, res, { resolvers, query, timeout }),
+    ],
+  ]);
+}
 
 async function serveStatic(res, pathname) {
   let relative;
@@ -82,14 +122,26 @@ async function serveStatic(res, pathname) {
   res.end(data);
 }
 
-async function handle(req, res, pathname) {
-  const route = routes.get(`${req.method} ${pathname}`);
-  if (route) return route(req, res);
-  if (req.method === 'GET') return serveStatic(res, pathname);
-  return sendJson(res, 404, { error: 'not found' });
-}
+function createServer(options = {}) {
+  const {
+    password,
+    resolvers = DEFAULT_RESOLVERS,
+    query = wire.query,
+    timeout = DEFAULT_TIMEOUT_MS,
+  } = options;
 
-function createServer() {
+  // Refuse to build a server without a strong password, even when used programmatically.
+  assertStrongPassword(password);
+  const checkAuth = createAuthChecker({ password });
+  const routes = buildRoutes({ resolvers, query, timeout });
+
+  async function handle(req, res, pathname) {
+    const route = routes.get(`${req.method} ${pathname}`);
+    if (route) return route(req, res);
+    if (req.method === 'GET') return serveStatic(res, pathname);
+    return sendJson(res, 404, { error: 'not found' });
+  }
+
   return http.createServer((req, res) => {
     const started = process.hrtime.bigint();
     const pathname = (req.url || '/').split('?')[0];
@@ -98,14 +150,25 @@ function createServer() {
       res.setHeader(name, value);
     }
 
-    // One line per request. Headers are never logged.
+    // One line per request. Query strings and headers are never logged.
     res.on('finish', () => {
       const ms = Number(process.hrtime.bigint() - started) / 1e6;
       console.log(`${req.method} ${pathname} ${res.statusCode} ${ms.toFixed(1)}ms`);
     });
 
     Promise.resolve()
-      .then(() => handle(req, res, pathname))
+      .then(() => {
+        const isPublic = req.method === 'GET' && pathname === '/healthz';
+        if (!isPublic && !checkAuth(req)) {
+          return sendJson(
+            res,
+            401,
+            { error: 'authentication required' },
+            { 'WWW-Authenticate': REALM_HEADER }
+          );
+        }
+        return handle(req, res, pathname);
+      })
       .catch((err) => {
         // Log the message only; never send a stack trace to the client.
         console.error(`error handling ${req.method} ${pathname}: ${err && err.message}`);
@@ -119,6 +182,14 @@ function createServer() {
 }
 
 if (require.main === module) {
+  const password = process.env.AUTH_PASSWORD;
+  try {
+    assertStrongPassword(password);
+  } catch (err) {
+    process.stderr.write(`${err.message}\n`);
+    process.exit(1);
+  }
+
   const envPort = Number.parseInt(process.env.PORT, 10);
   const fromEnv = Number.isInteger(envPort) && envPort > 0;
   const port = fromEnv ? envPort : 3000;
@@ -126,7 +197,10 @@ if (require.main === module) {
     ? 'PORT environment variable'
     : 'default 3000 (PORT unset or invalid)';
 
-  createServer().listen(port, () => {
+  createServer({
+    password,
+    timeout: parseTimeout(process.env.LOOKUP_TIMEOUT_MS),
+  }).listen(port, () => {
     console.log(`dnschecker listening on port ${port} (source: ${source})`);
   });
 }

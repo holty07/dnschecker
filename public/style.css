@@ -12,6 +12,11 @@
   --amber-fg: #6b4300;
   --red-bg: #f8d4d1;
   --red-fg: #7f1d1d;
+  --diff-bg: #fde2c4;
+  --diff-fg: #5c2e00;
+  --soft-bg: #eef2f7;
+  --error-bg: #fbe3e1;
+  --error-fg: #7f1d1d;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -29,6 +34,11 @@
     --amber-fg: #fbe2a6;
     --red-bg: #4a1716;
     --red-fg: #fbc4c0;
+    --diff-bg: #4d3210;
+    --diff-fg: #ffe3bd;
+    --soft-bg: #232a33;
+    --error-bg: #4a1716;
+    --error-fg: #fbc4c0;
   }
 }
 
@@ -59,7 +69,11 @@ code,
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.9em;
-  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
+td.server {
+  white-space: nowrap;
 }
 
 button {
@@ -150,4 +164,143 @@ td.status {
   color: var(--amber-fg);
   padding: 0.5rem 0.75rem;
   border-radius: 4px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+a {
+  color: var(--button);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.back {
+  margin: 0.5em 0 0;
+}
+
+/* Lookup form */
+
+.lookup-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin: 12px 0;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 220px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.field-type {
+  flex: 0 1 180px;
+}
+
+input,
+select {
+  font: inherit;
+  min-height: 44px;
+  padding: 0.4em 0.6em;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--fg);
+  width: 100%;
+}
+
+#submit {
+  min-height: 44px;
+}
+
+/* Results */
+
+.result-section {
+  margin: 24px 0;
+}
+
+.result-section h2 {
+  font-size: 1.1rem;
+  margin: 0 0 4px;
+  word-break: break-all;
+}
+
+.consensus {
+  margin: 0 0 8px;
+  color: var(--muted);
+}
+
+tr.differs td {
+  background: var(--diff-bg);
+  color: var(--diff-fg);
+}
+
+tr.no-majority td {
+  background: var(--soft-bg);
+}
+
+td .cname {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+td div + div {
+  margin-top: 2px;
+}
+
+.error {
+  background: var(--error-bg);
+  color: var(--error-fg);
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  margin: 8px 0;
+}
+
+.error p {
+  margin: 0.25em 0;
+  overflow-wrap: anywhere;
+}
+
+.site-footer {
+  max-width: 960px;
+  margin: 32px auto 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.site-footer p {
+  margin: 0.4em 0;
+}
+
+@media (max-width: 600px) {
+  /* Keep columns readable and let the table scroll sideways inside its box. */
+  table {
+    min-width: 600px;
+  }
+
+  th,
+  td {
+    padding: 6px;
+    font-size: 0.85rem;
+  }
+
+  .field,
+  .field-type {
+    flex: 1 1 100%;
+  }
+
+  #submit {
+    width: 100%;
+  }
 }

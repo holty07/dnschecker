@@ -3,18 +3,42 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DNS Checker – Phase 0 self-test</title>
+  <title>DNS Checker</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <main>
-    <h1>DNS Checker – Phase 0 self-test</h1>
-    <p>Queries <code>example.com</code> (A) against each resolver, over UDP and TCP separately.</p>
-    <button type="button" id="run">Run self-test</button>
-    <p id="status" role="status"></p>
-    <section id="summary" aria-label="Summary"></section>
-    <div id="results" class="table-wrap"></div>
+    <h1>DNS Checker</h1>
+    <form id="lookup-form" class="lookup-form" autocomplete="off">
+      <label class="field field-domain">
+        <span>Domain or IP</span>
+        <input id="domain" name="domain" type="text" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="example.com" required>
+      </label>
+      <label class="field field-type">
+        <span>Record type</span>
+        <select id="type" name="type">
+          <option value="A" selected>A</option>
+          <option value="AAAA">AAAA</option>
+          <option value="CNAME">CNAME</option>
+          <option value="MX">MX</option>
+          <option value="NS">NS</option>
+          <option value="TXT">TXT</option>
+          <option value="SOA">SOA</option>
+          <option value="CAA">CAA</option>
+          <option value="PTR">PTR</option>
+          <option value="ALL">All common</option>
+        </select>
+      </label>
+      <button type="submit" id="submit">Look up</button>
+    </form>
+    <p id="status" role="status" aria-live="polite"></p>
+    <div id="error" class="error" role="alert" hidden></div>
+    <div id="results"></div>
   </main>
+  <footer class="site-footer">
+    <p>Resolver diversity, not location diversity: public resolvers are anycast, so every query is answered by the node nearest this server.</p>
+    <p><a href="/selftest.html">Resolver self-test</a></p>
+  </footer>
   <script src="/app.js" defer></script>
 </body>
 </html>
