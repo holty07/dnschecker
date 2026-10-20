@@ -164,16 +164,14 @@ function serialLine(serials) {
   const values = serials && Array.isArray(serials.values) ? serials.values : [];
   if (values.length === 0) return el('p', 'serial muted', 'No SOA serial returned');
   if (serials.allMatch) return el('p', 'serial', 'SOA serial ' + values[0] + ' on every nameserver');
-  return el('p', 'serial warning', 'SOA serials differ: ' + values.join(', '));
+  return null; // The server's warnings already list differing serials.
 }
 
-// Lines for addresses the server skipped, and nameservers that could not be resolved.
+// Lines for nameservers that could not be resolved. Skipped private addresses are
+// already covered by the server's warnings.
 function nameserverNotes(nameservers) {
   const notes = [];
   (nameservers || []).forEach(function (ns) {
-    (ns.rejected || []).forEach(function (item) {
-      notes.push(ns.host + ': ' + item.address + ' skipped (' + item.reason + ')');
-    });
     if (ns.error) notes.push(ns.host + ': ' + ns.error);
   });
   return notes.map(function (text) { return el('p', 'note', text); });
@@ -216,7 +214,8 @@ function renderAuthoritativeSection(body) {
   const heading = body.zone ? body.type + ' · ' + body.name + ' — zone ' + body.zone : body.type + ' · ' + body.name;
   section.appendChild(el('h2', null, heading));
   section.appendChild(el('p', 'consensus', consensusText(body.consensus)));
-  section.appendChild(serialLine(body.serials));
+  const serial = serialLine(body.serials);
+  if (serial) section.appendChild(serial);
   (body.warnings || []).forEach(function (message) {
     section.appendChild(el('p', 'warning', message));
   });

@@ -8,6 +8,7 @@ const wire = require('./lib/wire');
 const { assertStrongPassword, createAuthChecker } = require('./lib/auth');
 const { validateQuery } = require('./lib/validate');
 const { lookupAll } = require('./lib/resolve');
+const { checkAuthoritative } = require('./lib/authoritative');
 const DEFAULT_RESOLVERS = require('./resolvers.json');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -74,6 +75,31 @@ async function handleLookup(req, res, { resolvers, query, timeout }) {
   sendJson(res, 200, { ...result, input: domain });
 }
 
+async function handleAuthoritative(req, res, { resolvers, query, timeout }) {
+  const url = new URL(req.url, 'http://localhost');
+  const domain = url.searchParams.get('domain');
+  const type = url.searchParams.get('type');
+  if (domain === null) return sendJson(res, 400, { error: 'domain is required' });
+
+  let checked;
+  try {
+    checked = validateQuery(domain, type);
+  } catch (err) {
+    if (err && err.code === 'EINVALID') return sendJson(res, 400, { error: err.message });
+    throw err;
+  }
+
+  let result;
+  try {
+    result = await checkAuthoritative(checked, { query, resolvers, timeout });
+  } catch (err) {
+    if (err && err.code === 'ENOZONE') return sendJson(res, 422, { error: 'No nameservers found for this name' });
+    if (err && err.code === 'EDISCOVERY') return sendJson(res, 502, { error: 'Could not reach the public resolvers to find the nameservers' });
+    throw err;
+  }
+  sendJson(res, 200, { ...result, input: domain });
+}
+
 function describeAddress(address) {
   if (!address) return null;
   if (typeof address === 'string') return `Unix socket ${address}`;
@@ -100,6 +126,10 @@ function buildRoutes({ resolvers, query, timeout }) {
     [
       'GET /api/lookup',
       async (req, res) => handleLookup(req, res, { resolvers, query, timeout }),
+    ],
+    [
+      'GET /api/authoritative',
+      async (req, res) => handleAuthoritative(req, res, { resolvers, query, timeout }),
     ],
   ]);
 }
