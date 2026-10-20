@@ -141,7 +141,6 @@ tbody tr:last-child td {
 
 td.status {
   font-weight: 600;
-  white-space: nowrap;
 }
 
 .status-ok {
@@ -205,6 +204,10 @@ a {
   flex: 0 1 180px;
 }
 
+.field-mode {
+  flex: 0 1 260px;
+}
+
 input,
 select {
   font: inherit;
@@ -245,6 +248,28 @@ tr.differs td {
 
 tr.no-majority td {
   background: var(--soft-bg);
+}
+
+/* A serial that is not the most common one across the nameservers. */
+td.serial-differs {
+  background: var(--diff-bg);
+  color: var(--diff-fg);
+  font-weight: 600;
+}
+
+.serial {
+  margin: 0 0 8px;
+}
+
+p.warning {
+  margin: 0 0 8px;
+}
+
+.note {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
 }
 
 td .cname {
@@ -296,7 +321,8 @@ td div + div {
   }
 
   .field,
-  .field-type {
+  .field-type,
+  .field-mode {
     flex: 1 1 100%;
   }
 
