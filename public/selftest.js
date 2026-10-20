@@ -75,10 +75,22 @@ function renderTable(results) {
   resultsBox.appendChild(table);
 }
 
+function renderRuntime(runtime) {
+  if (!runtime) return;
+  const lines = [
+    'Node ' + runtime.node + ', listening on port ' + runtime.listeningPort +
+      (runtime.portEnv === null ? ' (PORT not set, using the default)' : ' (PORT=' + runtime.portEnv + ')'),
+  ];
+  lines.forEach(function (text) {
+    summaryBox.appendChild(el('p', 'summary-item', text));
+  });
+}
+
 function render(body) {
   renderSummary(body.summary);
   renderWarnings(body.warnings);
   renderTable(body.results);
+  renderRuntime(body.runtime);
   statusLine.textContent = 'Started ' + body.startedAt + ' for ' + body.target + ' (' + body.type + ').';
 }
 
