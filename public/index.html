@@ -14,7 +14,7 @@
         <span>Domain or IP</span>
         <input id="domain" name="domain" type="text" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="example.com" required>
       </label>
-      <label class="field field-type">
+      <label class="field field-type" id="type-field">
         <span>Record type</span>
         <select id="type" name="type">
           <option value="A" selected>A</option>
@@ -34,10 +34,25 @@
         <select id="mode" name="mode">
           <option value="public" selected>Public resolvers</option>
           <option value="authoritative">Authoritative nameservers</option>
+          <option value="email">Email (SPF, DMARC, DKIM, MX)</option>
         </select>
+      </label>
+      <label class="field field-selector" id="selector-field" hidden>
+        <span>DKIM selector (optional)</span>
+        <input id="selector" name="selector" type="text" autocapitalize="off" spellcheck="false" autocomplete="off" placeholder="google">
       </label>
       <button type="submit" id="submit">Look up</button>
     </form>
+    <div id="selector-presets" class="presets" role="group" aria-label="Common DKIM selectors" hidden>
+      <span class="presets-label">Common selectors</span>
+      <button type="button" class="chip" data-selector="default">default</button>
+      <button type="button" class="chip" data-selector="google">google</button>
+      <button type="button" class="chip" data-selector="selector1">selector1</button>
+      <button type="button" class="chip" data-selector="selector2">selector2</button>
+      <button type="button" class="chip" data-selector="k1">k1</button>
+      <button type="button" class="chip" data-selector="s1">s1</button>
+      <button type="button" class="chip" data-selector="s2">s2</button>
+    </div>
     <p id="status" role="status" aria-live="polite"></p>
     <div id="error" class="error" role="alert" hidden></div>
     <div id="results"></div>

@@ -6,13 +6,14 @@ It runs as a Node.js Project on SiteGround Cloud and deploys from GitHub. It has
 
 The full brief is in [docs/PLAN.md](docs/PLAN.md). Project rules are in [CLAUDE.md](CLAUDE.md).
 
-**Status:** Phases 1 and 2 are built. Lookups query several public resolvers in parallel and highlight answers that differ from the majority. Authoritative mode queries the zone's own nameservers directly and compares their answers and SOA serials. The email DNS panel (Phase 3) is not built yet.
+**Status:** Phases 1 to 3 are built. Lookups compare several public resolvers, authoritative mode queries the zone's own nameservers and compares their answers and SOA serials, and email mode checks SPF, DMARC, DKIM and MX. Phase 4 (rate limiting and hardening) and Phase 5 (polish) are next.
 
 Endpoints (all need HTTP Basic auth except `/healthz`):
 
 - `/` is the lookup page. Enter a domain or IP and choose a record type, or "All common" for every common type at once.
 - `GET /api/lookup?domain=&type=` returns the per-resolver results and the consensus as JSON.
 - `GET /api/authoritative?domain=&type=` finds the zone, queries each of its nameservers directly over TCP (at most 8 nameservers and 16 addresses, public addresses only) and returns their answers, SOA serials and warnings. It returns 422 if no zone is found and 502 if the public resolvers can't be reached.
+- `GET /api/email?domain=&selector=` checks SPF (lookup count, void lookups, include tree), DMARC (policy in plain English), MX (with null MX and CNAME checks) and, if a selector is given, DKIM (key type and size). Selectors may contain dots.
 - `/selftest.html` and `GET /api/selftest` are the Phase 0 reachability check.
 - `/healthz` returns `ok` and needs no auth.
 
