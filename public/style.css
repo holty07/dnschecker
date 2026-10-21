@@ -691,3 +691,71 @@ button.secondary {
 .login-form button {
   min-height: 44px;
 }
+
+/* Copy as text and recent lookups */
+
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.section-head h2 {
+  margin: 0;
+}
+
+button.copy-button {
+  min-height: 40px;
+  font-size: 0.9rem;
+  padding: 0.3em 0.9em;
+}
+
+.results-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 16px 0 0;
+}
+
+/* Off-screen but selectable, for the execCommand clipboard fallback. */
+.copy-fallback {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  opacity: 0;
+  resize: none;
+}
+
+.recent {
+  align-items: center;
+}
+
+.recent-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.recent-chips .chip {
+  max-width: 100%;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+button.recent-clear {
+  min-height: 36px;
+  padding: 0.3em 0.6em;
+  background: transparent;
+  color: var(--button);
+  text-decoration: underline;
+  font-size: 0.9rem;
+}
