@@ -6,13 +6,14 @@ It runs as a Node.js Project on SiteGround Cloud and deploys from GitHub. It has
 
 The full brief is in [docs/PLAN.md](docs/PLAN.md). Project rules are in [CLAUDE.md](CLAUDE.md).
 
-**Status:** Phases 1 and 2 are built. Lookups query several public resolvers in parallel and highlight answers that differ from the majority. Authoritative mode queries the zone's own nameservers directly and compares their answers and SOA serials. The email DNS panel (Phase 3) is not built yet.
+**Status:** Phases 1 to 3 are built. Lookups compare several public resolvers, authoritative mode queries the zone's own nameservers and compares their answers and SOA serials, and email mode checks SPF, DMARC, DKIM and MX. Phase 4 (rate limiting and hardening) and Phase 5 (polish) are next.
 
 Endpoints (all need HTTP Basic auth except `/healthz`):
 
 - `/` is the lookup page. Enter a domain or IP and choose a record type, or "All common" for every common type at once.
 - `GET /api/lookup?domain=&type=` returns the per-resolver results and the consensus as JSON.
 - `GET /api/authoritative?domain=&type=` finds the zone, queries each of its nameservers directly over TCP (at most 8 nameservers and 16 addresses, public addresses only) and returns their answers, SOA serials and warnings. It returns 422 if no zone is found and 502 if the public resolvers can't be reached.
+- `GET /api/email?domain=&selector=` checks SPF (lookup count, void lookups, include tree), DMARC (policy in plain English), MX (with null MX and CNAME checks) and, if a selector is given, DKIM (key type and size). Selectors may contain dots.
 - `/selftest.html` and `GET /api/selftest` are the Phase 0 reachability check.
 - `/healthz` returns `ok` and needs no auth.
 
@@ -70,6 +71,7 @@ Items still marked unverified need confirming. Record the answer here once check
 - **Listening port.** **Confirmed 2026-10-20 from the deployed self-test:** SiteGround sets `PORT` (it was `64321`), and the server listens on it. Don't set `PORT` yourself. The incoming connection had no local port, which in Node only happens on a Unix socket, so SiteGround probably wraps the app and redirects its listener. That is unverified: `/selftest.html` now shows the actual listener address.
 - **Logs.** Statistics > Error Log shows nginx entries, not the app's console output. Use `/selftest.html` for runtime details.
 - **Start command.** Does the platform expect `npm start` or `node server.js`? Status: unverified – to confirm on deploy. A `start` script runs `node server.js`, so either works if the platform accepts it.
+- **Outbound IPv6.** **Observed 2026-10-21:** in authoritative mode, every IPv6 nameserver address for immersemarketing.com.au showed as unreachable, while IPv4 worked. SiteGround appears to have no outbound IPv6, so IPv6 addresses are shown as unreachable and left out of the comparison. A nameserver with only IPv6 addresses can't be checked from this host.
 - **Behind a proxy.** Does SiteGround forward `X-Forwarded-For`? Status: unverified. Nothing keys on client IP yet, so this does not affect Phase 1.
 
 ### Phase 0 self-test results (2026-10-20)

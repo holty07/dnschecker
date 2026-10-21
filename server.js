@@ -9,6 +9,7 @@ const { assertStrongPassword, createAuthChecker } = require('./lib/auth');
 const { validateQuery } = require('./lib/validate');
 const { lookupAll } = require('./lib/resolve');
 const { checkAuthoritative } = require('./lib/authoritative');
+const { checkEmail } = require('./lib/email');
 const DEFAULT_RESOLVERS = require('./resolvers.json');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -100,13 +101,44 @@ async function handleAuthoritative(req, res, { resolvers, query, timeout }) {
   sendJson(res, 200, { ...result, input: domain });
 }
 
+async function handleEmail(req, res, { resolvers, query, timeout, checkSpf }) {
+  const url = new URL(req.url, 'http://localhost');
+  const domain = url.searchParams.get('domain');
+  if (domain === null) return sendJson(res, 400, { error: 'domain is required' });
+
+  let checked;
+  try {
+    checked = validateQuery(domain, 'TXT');
+  } catch (err) {
+    if (err && err.code === 'EINVALID') return sendJson(res, 400, { error: err.message });
+    throw err;
+  }
+
+  // Selectors may contain dots (for example s1.2024); validate the whole DKIM name.
+  const rawSelector = url.searchParams.get('selector');
+  const selector = rawSelector === null ? '' : rawSelector.trim();
+  if (selector) {
+    try {
+      validateQuery(`${selector}._domainkey.${checked.name}`, 'TXT');
+    } catch (err) {
+      if (err && err.code === 'EINVALID') return sendJson(res, 400, { error: 'Invalid DKIM selector' });
+      throw err;
+    }
+  }
+
+  const opts = { query, resolvers, timeout };
+  if (checkSpf) opts.checkSpf = checkSpf;
+  const result = await checkEmail({ domain: checked.name, selector }, opts);
+  sendJson(res, 200, { ...result, input: domain });
+}
+
 function describeAddress(address) {
   if (!address) return null;
   if (typeof address === 'string') return `Unix socket ${address}`;
   return `port ${address.port}`;
 }
 
-function buildRoutes({ resolvers, query, timeout }) {
+function buildRoutes({ resolvers, query, timeout, checkSpf }) {
   return new Map([
     ['GET /healthz', async (req, res) => sendText(res, 200, 'ok')],
     [
@@ -130,6 +162,10 @@ function buildRoutes({ resolvers, query, timeout }) {
     [
       'GET /api/authoritative',
       async (req, res) => handleAuthoritative(req, res, { resolvers, query, timeout }),
+    ],
+    [
+      'GET /api/email',
+      async (req, res) => handleEmail(req, res, { resolvers, query, timeout, checkSpf }),
     ],
   ]);
 }
@@ -171,12 +207,13 @@ function createServer(options = {}) {
     resolvers = DEFAULT_RESOLVERS,
     query = wire.query,
     timeout = DEFAULT_TIMEOUT_MS,
+    checkSpf, // optional override, for tests; defaults to lib/spf.js (loaded lazily)
   } = options;
 
   // Refuse to build a server without a strong password, even when used programmatically.
   assertStrongPassword(password);
   const checkAuth = createAuthChecker({ password });
-  const routes = buildRoutes({ resolvers, query, timeout });
+  const routes = buildRoutes({ resolvers, query, timeout, checkSpf });
 
   async function handle(req, res, pathname) {
     const route = routes.get(`${req.method} ${pathname}`);

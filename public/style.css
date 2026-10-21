@@ -205,7 +205,36 @@ a {
 }
 
 .field-mode {
-  flex: 0 1 260px;
+  flex: 0 1 300px;
+}
+
+.field-selector {
+  flex: 0 1 240px;
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: -4px 0 12px;
+}
+
+.presets-label {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-right: 4px;
+}
+
+.chip {
+  min-height: 36px;
+  padding: 0.3em 0.9em;
+  background: var(--soft-bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
 }
 
 input,
@@ -295,6 +324,251 @@ td div + div {
   overflow-wrap: anywhere;
 }
 
+/* Email DNS */
+
+.email-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.check-card {
+  min-width: 0;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+
+.check-card.check-muted {
+  background: var(--soft-bg);
+  color: var(--muted);
+  border-style: dashed;
+}
+
+.check-card > p {
+  margin: 0.4em 0;
+}
+
+.check-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.check-head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15em 0.7em;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.badge-pass {
+  background: var(--ok-bg);
+  color: var(--ok-fg);
+}
+
+.badge-warn {
+  background: var(--amber-bg);
+  color: var(--amber-fg);
+}
+
+.badge-fail {
+  background: var(--red-bg);
+  color: var(--red-fg);
+}
+
+.badge-muted {
+  background: var(--soft-bg);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
+.record {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: var(--soft-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.record-details > summary,
+.tree-details > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--button);
+  margin: 6px 0;
+}
+
+.bullets {
+  margin: 4px 0 0;
+  padding-left: 1.25rem;
+}
+
+.findings {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+.findings li {
+  margin: 4px 0;
+  padding: 0.4rem 0.6rem;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+
+.findings li.warning {
+  margin-bottom: 4px;
+}
+
+.check-error {
+  background: var(--error-bg);
+  color: var(--error-fg);
+}
+
+.null-mx {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  background: var(--soft-bg);
+  font-weight: 600;
+}
+
+.status-pill {
+  display: inline-block;
+  padding: 0 0.5em;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.mx-table td:first-child {
+  white-space: nowrap;
+}
+
+.meter {
+  margin: 8px 0;
+}
+
+.meter-label {
+  display: inline-block;
+  margin: 0 0 4px;
+  padding: 0 0.3em;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.meter.over .meter-label {
+  background: var(--red-bg);
+  color: var(--red-fg);
+}
+
+.meter-bar {
+  height: 8px;
+  overflow: hidden;
+  background: var(--soft-bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.meter-fill {
+  height: 100%;
+  background: var(--button);
+}
+
+.meter.over .meter-fill {
+  background: var(--red-fg);
+}
+
+.qualifier {
+  font-weight: 600;
+}
+
+.tree {
+  margin: 6px 0 0;
+  padding-left: 1.1rem;
+  border-left: 2px solid var(--border);
+  list-style: none;
+}
+
+.tree li {
+  margin: 6px 0;
+  min-width: 0;
+}
+
+.term {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+}
+
+.term .mono {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.term-error {
+  color: var(--error-fg);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.tag {
+  padding: 0.05em 0.5em;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--soft-bg);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tag-void,
+.tag-amber {
+  background: var(--amber-bg);
+  color: var(--amber-fg);
+  border-color: transparent;
+}
+
+.tag-red {
+  background: var(--red-bg);
+  color: var(--red-fg);
+  border-color: transparent;
+}
+
+.fact {
+  margin: 0.3em 0;
+}
+
+.fact-label,
+.cname-line {
+  color: var(--muted);
+}
+
+.flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+
 .site-footer {
   max-width: 960px;
   margin: 32px auto 0;
@@ -320,9 +594,22 @@ td div + div {
     font-size: 0.85rem;
   }
 
+  /* The MX table has three short columns, so it fits without a forced minimum width. */
+  .mx-table {
+    min-width: 0;
+  }
+
+  .mx-table .mono {
+    font-size: 0.78rem;
+    /* Keep each address on one line; the table scrolls inside its box if needed. */
+    overflow-wrap: normal;
+    white-space: nowrap;
+  }
+
   .field,
   .field-type,
-  .field-mode {
+  .field-mode,
+  .field-selector {
     flex: 1 1 100%;
   }
 

@@ -285,3 +285,42 @@ test('/api/authoritative gives 422 when no zone is found', async () => {
     query: async () => ({ rcodeName: 'NOERROR', flags: { rcode: 0, aa: false }, answers: [], ms: 1 }),
   });
 });
+
+// /api/email. checkSpf is injected so the test does not depend on lib/spf.js.
+const stubSpf = async (domain) => ({ domain, found: false, record: null, records: [], errors: [], warnings: [] });
+
+test('/api/email returns 401 without auth', async () => {
+  await withServer(async (port) => {
+    const res = await getAnon(port, '/api/email?domain=example.com');
+    assert.equal(res.status, 401);
+  }, { checkSpf: stubSpf });
+});
+
+test('/api/email rejects a bad domain, a missing domain and a bad selector', async () => {
+  await withServer(async (port) => {
+    let res = await get(port, '/api/email?domain=exa%20mple.com');
+    assert.equal(res.status, 400);
+    res = await get(port, '/api/email');
+    assert.equal(res.status, 400);
+    res = await get(port, '/api/email?domain=example.com&selector=bad%20selector');
+    assert.equal(res.status, 400);
+    assert.deepEqual(JSON.parse(res.body), { error: 'Invalid DKIM selector' });
+  }, { checkSpf: stubSpf });
+});
+
+test('/api/email returns the combined result, allowing dotted selectors', async () => {
+  const calls = [];
+  await withServer(async (port) => {
+    const res = await get(port, '/api/email?domain=Example.com&selector=s1.2024');
+    assert.equal(res.status, 200);
+    const body = JSON.parse(res.body);
+    assert.equal(body.input, 'Example.com');
+    assert.equal(body.domain, 'example.com');
+    assert.equal(body.dkim.name, 's1.2024._domainkey.example.com');
+    assert.deepEqual(Object.keys(body).sort(), ['dkim', 'dmarc', 'domain', 'input', 'mx', 'spf']);
+    assert.ok(calls.length > 0 && calls.every((c) => c.transport === 'tcp'));
+
+    const noSel = JSON.parse((await get(port, '/api/email?domain=example.com')).body);
+    assert.equal(noSel.dkim, null);
+  }, { query: fakeQuery(calls), checkSpf: stubSpf });
+});

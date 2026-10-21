@@ -87,8 +87,10 @@ These came from reviewing `docs/PLAN.md` against Node's actual behaviour and the
 4. **Rate limiting behind a proxy.** SiteGround probably proxies requests, so `req.socket.remoteAddress`
    may be the proxy's address. Check whether `X-Forwarded-For` is set and trustworthy before keying
    the limiter on it.
-5. **IPv6 reachability is unknown.** If the server has no outbound IPv6, report AAAA-only
-   nameservers as `unreachable`. Don't count them as disagreeing.
+5. **No outbound IPv6 on SiteGround** (observed 2026-10-21: every IPv6 nameserver address for
+   immersemarketing.com.au was `unreachable` in authoritative mode). Keep reporting IPv6 addresses as
+   `unreachable` and excluding them from the comparison; don't count them as disagreeing. A
+   nameserver with only IPv6 addresses can't be checked from this host.
 6. **TCP only.** Because queries use TCP, the 512-byte UDP limit and EDNS0 don't apply (TCP
    messages go up to 65,535 bytes). Keep UDP support in `lib/wire.js` and in `/api/selftest` so it
    is obvious if the platform ever opens UDP. Some authoritative nameservers may not answer over
