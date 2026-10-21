@@ -6,7 +6,7 @@ It runs as a Node.js Project on SiteGround Cloud and deploys from GitHub. It has
 
 The full brief is in [docs/PLAN.md](docs/PLAN.md). Project rules are in [CLAUDE.md](CLAUDE.md).
 
-**Status:** Phases 1 to 3 are built. Lookups compare several public resolvers, authoritative mode queries the zone's own nameservers and compares their answers and SOA serials, and email mode checks SPF, DMARC, DKIM and MX. Phase 4 (rate limiting and hardening) and Phase 5 (polish) are next.
+**Status:** Phases 1 to 4 are built: resolver comparison, authoritative checks, the email DNS panel, and rate limiting and hardening. Phase 5 (polish) is next.
 
 Endpoints (all need HTTP Basic auth except `/healthz`):
 
@@ -23,6 +23,20 @@ Every route except `/healthz` requires HTTP Basic auth. The username is `admin`.
 
 - `AUTH_PASSWORD` is **required**. The server refuses to start if it is unset or shorter than 12 characters, and logs the reason to stderr.
 - Use a long random password. Browsers cache Basic credentials for the session, so sign out by closing the browser.
+
+## Limits and hardening
+
+| Limit | Default |
+|---|---|
+| Failed sign-ins (wrong credentials only) | 20 per 15 minutes per client, then 429 |
+| API requests | 60 per minute per client (page files are not counted) |
+| Lookups in progress | 10 per client, 20 in total, then 429 |
+| Outbound DNS connections | 64 at once (extra queries wait) |
+
+- **Client address:** a client is identified by the last `X-Forwarded-For` entry, then `X-Real-IP`, then the socket address. The last `X-Forwarded-For` entry is the one the nearest proxy added; earlier entries come from the client and can be faked.
+- **Unknown clients:** if none of these is available, all requests share one key. The sign-in lockout is then switched off, so that bots can't lock out the real user. The password length makes guessing impractical anyway.
+- **Response headers:** every response sends a strict Content Security Policy, HSTS, `X-Frame-Options: DENY`, `nosniff`, `no-referrer` and a Permissions Policy. API, 401 and 429 responses are `no-store`.
+- **Request log:** one line per request, with a salted 8-character client tag in place of the IP address.
 
 ## Environment variables
 
@@ -72,7 +86,7 @@ Items still marked unverified need confirming. Record the answer here once check
 - **Logs.** Statistics > Error Log shows nginx entries, not the app's console output. Use `/selftest.html` for runtime details.
 - **Start command.** Does the platform expect `npm start` or `node server.js`? Status: unverified – to confirm on deploy. A `start` script runs `node server.js`, so either works if the platform accepts it.
 - **Outbound IPv6.** **Observed 2026-10-21:** in authoritative mode, every IPv6 nameserver address for immersemarketing.com.au showed as unreachable, while IPv4 worked. SiteGround appears to have no outbound IPv6, so IPv6 addresses are shown as unreachable and left out of the comparison. A nameserver with only IPv6 addresses can't be checked from this host.
-- **Behind a proxy.** Does SiteGround forward `X-Forwarded-For`? Status: unverified. Nothing keys on client IP yet, so this does not affect Phase 1.
+- **Behind a proxy.** Does SiteGround's nginx set `X-Forwarded-For` or `X-Real-IP`? Status: unverified. `/selftest.html` shows what the app sees ("Client address seen as …"), so record the answer here after deploying Phase 4.
 
 ### Phase 0 self-test results (2026-10-20)
 

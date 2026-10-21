@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('node:http');
+const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { selftest } = require('./lib/selftest');
@@ -10,6 +11,12 @@ const { validateQuery } = require('./lib/validate');
 const { lookupAll } = require('./lib/resolve');
 const { checkAuthoritative } = require('./lib/authoritative');
 const { checkEmail } = require('./lib/email');
+const {
+  createRateLimiter,
+  createConcurrencyLimiter,
+  createSemaphore,
+  clientKey,
+} = require('./lib/ratelimit');
 const DEFAULT_RESOLVERS = require('./resolvers.json');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -22,12 +29,34 @@ const CONTENT_TYPES = {
   '.css': 'text/css; charset=utf-8',
 };
 
+const DEFAULT_LIMITS = {
+  apiPerMinute: 60,
+  failedAuthPer15Min: 20,
+  maxConcurrentApiPerClient: 10,
+  maxConcurrentApi: 20,
+  maxOutboundQueries: 64,
+};
+
 const SECURITY_HEADERS = {
-  'Content-Security-Policy': "default-src 'self'",
+  'Content-Security-Policy':
+    "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'",
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
   'X-Frame-Options': 'DENY',
+  // Browsers ignore this over plain HTTP, so it is harmless in local development.
+  'Strict-Transport-Security': 'max-age=31536000',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
 };
+
+const NO_STORE = { 'Cache-Control': 'no-store' };
+
+// Longest header value echoed back by the self-test (it is the requester's own header).
+const MAX_ECHO_LENGTH = 200;
+
+function headerValue(req, name) {
+  const v = req.headers[name];
+  return typeof v === 'string' ? v.slice(0, MAX_ECHO_LENGTH) : null;
+}
 
 function sendJson(res, status, body, extraHeaders = {}) {
   const payload = JSON.stringify(body);
@@ -151,6 +180,11 @@ function buildRoutes({ resolvers, query, timeout, checkSpf }) {
           // A port number, or a path when the platform swaps the listener for a Unix socket.
           listeningOn: describeAddress(req.socket.server && req.socket.server.address()),
           portEnv: process.env.PORT === undefined ? null : process.env.PORT,
+          // The requester's own address as the app sees it. Only these headers are echoed.
+          forwardedFor: headerValue(req, 'x-forwarded-for'),
+          realIp: headerValue(req, 'x-real-ip'),
+          remoteAddress: req.socket.remoteAddress || null,
+          clientKey: clientKey(req),
         };
         sendJson(res, 200, body);
       },
@@ -205,19 +239,63 @@ function createServer(options = {}) {
   const {
     password,
     resolvers = DEFAULT_RESOLVERS,
-    query = wire.query,
+    query: rawQuery = wire.query,
     timeout = DEFAULT_TIMEOUT_MS,
     checkSpf, // optional override, for tests; defaults to lib/spf.js (loaded lazily)
   } = options;
+  const limits = { ...DEFAULT_LIMITS, ...(options.limits || {}) };
 
   // Refuse to build a server without a strong password, even when used programmatically.
   assertStrongPassword(password);
   const checkAuth = createAuthChecker({ password });
+
+  // Cap outbound DNS connections. Excess queries wait their turn rather than fail.
+  const outbound = createSemaphore(limits.maxOutboundQueries);
+  const query = (...args) => outbound.run(() => rawQuery(...args));
+
   const routes = buildRoutes({ resolvers, query, timeout, checkSpf });
+  const knownPaths = new Set([...routes.keys()].map((k) => k.slice(k.indexOf(' ') + 1)));
+
+  const failedAuth = createRateLimiter({ limit: limits.failedAuthPer15Min, windowMs: 15 * 60 * 1000 });
+  const apiRate = createRateLimiter({ limit: limits.apiPerMinute, windowMs: 60 * 1000 });
+  const globalInFlight = createConcurrencyLimiter(limits.maxConcurrentApi);
+  const clientInFlight = new Map(); // key -> concurrency limiter, removed when idle
+
+  // Take a per-client and a global slot. Returns one release function, or null.
+  function acquireSlot(key) {
+    let perClient = clientInFlight.get(key);
+    if (!perClient) {
+      perClient = createConcurrencyLimiter(limits.maxConcurrentApiPerClient);
+      clientInFlight.set(key, perClient);
+    }
+    const releaseClient = perClient.tryAcquire();
+    const releaseGlobal = releaseClient ? globalInFlight.tryAcquire() : null;
+    if (!releaseGlobal) {
+      if (releaseClient) releaseClient();
+      if (perClient.active === 0) clientInFlight.delete(key);
+      return null;
+    }
+    return function release() {
+      releaseGlobal();
+      releaseClient();
+      if (perClient.active === 0 && clientInFlight.get(key) === perClient) clientInFlight.delete(key);
+    };
+  }
+
+  // The log carries only a short tag derived from the client key and a random
+  // per-process salt. It lets abuse from one client be correlated without writing
+  // IP addresses to the log, and it cannot be reversed or matched across restarts.
+  const salt = crypto.randomBytes(16);
+  function clientTag(key) {
+    return crypto.createHash('sha256').update(key).update(salt).digest('hex').slice(0, 8);
+  }
 
   async function handle(req, res, pathname) {
     const route = routes.get(`${req.method} ${pathname}`);
     if (route) return route(req, res);
+    if (knownPaths.has(pathname)) {
+      return sendJson(res, 405, { error: 'method not allowed' }, { Allow: 'GET' });
+    }
     if (req.method === 'GET') return serveStatic(res, pathname);
     return sendJson(res, 404, { error: 'not found' });
   }
@@ -225,27 +303,74 @@ function createServer(options = {}) {
   return http.createServer((req, res) => {
     const started = process.hrtime.bigint();
     const pathname = (req.url || '/').split('?')[0];
+    const key = clientKey(req);
+    const isApi = pathname.startsWith('/api/');
 
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
       res.setHeader(name, value);
     }
+    if (isApi) res.setHeader('Cache-Control', 'no-store');
 
     // One line per request. Query strings and headers are never logged.
     res.on('finish', () => {
       const ms = Number(process.hrtime.bigint() - started) / 1e6;
-      console.log(`${req.method} ${pathname} ${res.statusCode} ${ms.toFixed(1)}ms`);
+      console.log(`${req.method} ${pathname} ${res.statusCode} ${ms.toFixed(1)}ms client=${clientTag(key)}`);
     });
+
+    let release = null;
 
     Promise.resolve()
       .then(() => {
         const isPublic = req.method === 'GET' && pathname === '/healthz';
-        if (!isPublic && !checkAuth(req)) {
-          return sendJson(
-            res,
-            401,
-            { error: 'authentication required' },
-            { 'WWW-Authenticate': REALM_HEADER }
-          );
+        if (!isPublic) {
+          // Locked-out clients are refused before their credentials are looked at.
+          // When no client address is visible (no proxy header, Unix socket), every
+          // request shares the key 'unknown'; locking that out would let anyone lock
+          // out the real user, so the lockout only applies to identified clients.
+          const lockable = key !== 'unknown';
+          const lock = lockable ? failedAuth.peek(key) : { allowed: true };
+          if (!lock.allowed) {
+            return sendJson(
+              res,
+              429,
+              { error: 'Too many failed sign-in attempts. Try again later.' },
+              { ...NO_STORE, 'Retry-After': String(lock.retryAfterSeconds) }
+            );
+          }
+          if (!checkAuth(req)) {
+            // Browsers send no credentials on the first request and only prompt after
+            // the 401, so only a wrong password counts as a failed attempt.
+            if (lockable && req.headers.authorization) failedAuth.hit(key);
+            return sendJson(
+              res,
+              401,
+              { error: 'authentication required' },
+              { ...NO_STORE, 'WWW-Authenticate': REALM_HEADER }
+            );
+          }
+        }
+
+        if (isApi) {
+          const rate = apiRate.hit(key);
+          if (!rate.allowed) {
+            return sendJson(
+              res,
+              429,
+              {
+                error: `Rate limit reached: ${limits.apiPerMinute} requests per minute. Try again in ${rate.retryAfterSeconds} seconds.`,
+              },
+              { ...NO_STORE, 'Retry-After': String(rate.retryAfterSeconds) }
+            );
+          }
+          release = acquireSlot(key);
+          if (!release) {
+            return sendJson(
+              res,
+              429,
+              { error: 'Too many lookups in progress. Wait for them to finish.' },
+              { ...NO_STORE, 'Retry-After': '1' }
+            );
+          }
         }
         return handle(req, res, pathname);
       })
@@ -257,6 +382,9 @@ function createServer(options = {}) {
         } else {
           res.end();
         }
+      })
+      .finally(() => {
+        if (release) release(); // idempotent; runs on success, errors and aborted clients
       });
   });
 }
