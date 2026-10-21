@@ -71,6 +71,7 @@ Items still marked unverified need confirming. Record the answer here once check
 - **Listening port.** **Confirmed 2026-10-20 from the deployed self-test:** SiteGround sets `PORT` (it was `64321`), and the server listens on it. Don't set `PORT` yourself. The incoming connection had no local port, which in Node only happens on a Unix socket, so SiteGround probably wraps the app and redirects its listener. That is unverified: `/selftest.html` now shows the actual listener address.
 - **Logs.** Statistics > Error Log shows nginx entries, not the app's console output. Use `/selftest.html` for runtime details.
 - **Start command.** Does the platform expect `npm start` or `node server.js`? Status: unverified – to confirm on deploy. A `start` script runs `node server.js`, so either works if the platform accepts it.
+- **Outbound IPv6.** **Observed 2026-10-21:** in authoritative mode, every IPv6 nameserver address for immersemarketing.com.au showed as unreachable, while IPv4 worked. SiteGround appears to have no outbound IPv6, so IPv6 addresses are shown as unreachable and left out of the comparison. A nameserver with only IPv6 addresses can't be checked from this host.
 - **Behind a proxy.** Does SiteGround forward `X-Forwarded-For`? Status: unverified. Nothing keys on client IP yet, so this does not affect Phase 1.
 
 ### Phase 0 self-test results (2026-10-20)
