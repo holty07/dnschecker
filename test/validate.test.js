@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { TYPES, validateQuery } = require('../lib/validate');
+const { TYPES, validateQuery, isPublicAddress } = require('../lib/validate');
 
 const rejects = (input, type = 'A', re) =>
   assert.throws(() => validateQuery(input, type), (e) => e.code === 'EINVALID' && (!re || re.test(e.message)));
@@ -92,4 +92,42 @@ test('PTR converts IPs to reverse names', () => {
 
 test('PTR still accepts a plain reverse name', () => {
   assert.equal(validateQuery('4.3.2.1.in-addr.arpa', 'PTR').name, '4.3.2.1.in-addr.arpa');
+});
+
+test('isPublicAddress: IPv4 range edges', () => {
+  const no = [
+    '0.0.0.0', '0.255.255.255', '10.0.0.0', '10.255.255.255', '100.64.0.0', '100.127.255.255',
+    '127.0.0.1', '127.255.255.255', '169.254.0.0', '169.254.255.255', '172.16.0.0', '172.31.255.255',
+    '192.0.0.0', '192.0.0.255', '192.0.2.0', '192.0.2.255', '192.88.99.0', '192.88.99.255',
+    '192.168.0.0', '192.168.255.255', '198.18.0.0', '198.19.255.255', '198.51.100.0', '198.51.100.255',
+    '203.0.113.0', '203.0.113.255', '224.0.0.0', '239.255.255.255', '240.0.0.0', '255.255.255.255',
+  ];
+  const yes = [
+    '1.0.0.0', '9.255.255.255', '11.0.0.0', '100.63.255.255', '100.128.0.0', '126.255.255.255', '128.0.0.0',
+    '169.253.255.255', '169.255.0.0', '172.15.255.255', '172.32.0.0', '192.0.1.0', '192.0.3.0',
+    '192.88.98.255', '192.88.100.0', '192.167.255.255', '192.169.0.0', '198.17.255.255', '198.20.0.0',
+    '198.51.99.255', '198.51.101.0', '203.0.112.255', '203.0.114.0', '223.255.255.255', '8.8.8.8',
+  ];
+  for (const ip of no) assert.equal(isPublicAddress(ip), false, ip);
+  for (const ip of yes) assert.equal(isPublicAddress(ip), true, ip);
+});
+
+test('isPublicAddress: IPv6 range edges', () => {
+  const no = [
+    '::', '::1', '::ffff:0:0', '::ffff:10.0.0.1', '::ffff:8.8.8.8', '64:ff9b::1', 'fc00::', 'fdff:ffff::1',
+    'fe80::1', 'febf::1', 'ff02::1', '1fff:ffff::1', '4000::1', '2001::', '2001:1ff:ffff::1',
+    '2001:db8::', '2001:db8:ffff::1', '2002::', '2002:ffff::1', '3fff::', '3fff:fff:ffff::1',
+  ];
+  const yes = [
+    '2000::1', '2001:200::1', '2001:4860:4860::8888', '2606:4700:4700::1111', '2001:db7:ffff::1',
+    '2001:db9::1', '2003::1', '3ffe::1', '3fff:1000::1', '3fff:1000:ffff::1',
+  ];
+  for (const ip of no) assert.equal(isPublicAddress(ip), false, ip);
+  for (const ip of yes) assert.equal(isPublicAddress(ip), true, ip);
+});
+
+test('isPublicAddress: non-IP input is false', () => {
+  for (const v of ['example.com', '', ' 8.8.8.8', '8.8.8.8/32', '1.2.3', 'fe80::1%eth0', null, undefined, 42, {}]) {
+    assert.equal(isPublicAddress(v), false, String(v));
+  }
 });

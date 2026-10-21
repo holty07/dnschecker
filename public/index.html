@@ -29,6 +29,13 @@
           <option value="ALL">All common</option>
         </select>
       </label>
+      <label class="field field-mode">
+        <span>Check against</span>
+        <select id="mode" name="mode">
+          <option value="public" selected>Public resolvers</option>
+          <option value="authoritative">Authoritative nameservers</option>
+        </select>
+      </label>
       <button type="submit" id="submit">Look up</button>
     </form>
     <p id="status" role="status" aria-live="polite"></p>

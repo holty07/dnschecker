@@ -224,3 +224,64 @@ test('non-GET requests return 404 with auth and 401 without (healthz is GET only
     assert.deepEqual(JSON.parse(authed.body), { error: 'not found' });
   });
 });
+
+// Fake for /api/authoritative: public discovery resolvers answer NS/A queries, nameservers answer directly.
+function authoritativeFake(calls) {
+  const reply = (answers, aa = false) => ({ rcodeName: 'NOERROR', flags: { rcode: 0, aa, tc: false }, answers, ms: 1 });
+  const rec = (name, type, data) => ({ name, type, class: 1, ttl: 60, data });
+  return async (args) => {
+    calls.push(args);
+    if (args.server === '10.0.0.1' || args.server === '10.0.0.2') {
+      if (args.type === 'NS') return reply([rec('example.com', 'NS', 'ns1.example.com')]);
+      if (args.type === 'A') return reply([rec('ns1.example.com', 'A', '45.1.1.1')]);
+      return reply([]);
+    }
+    if (args.type === 'SOA') return reply([rec('example.com', 'SOA', { nsname: 'ns1.example.com', hostmaster: 'h.example.com', serial: 7, refresh: 1, retry: 1, expire: 1, minttl: 1 })], true);
+    return reply([rec(args.name, 'A', '1.2.3.4')], true);
+  };
+}
+
+test('/api/authoritative requires auth', async () => {
+  await withServer(async (port) => {
+    const res = await getAnon(port, '/api/authoritative?domain=example.com&type=A');
+    assert.equal(res.status, 401);
+  });
+});
+
+test('/api/authoritative rejects a bad domain with 400', async () => {
+  await withServer(async (port) => {
+    const res = await get(port, '/api/authoritative?domain=http%3A%2F%2Fexample.com&type=A');
+    assert.equal(res.status, 400);
+    assert.ok(JSON.parse(res.body).error);
+    assert.equal((await get(port, '/api/authoritative?type=A')).status, 400);
+  });
+});
+
+test('/api/authoritative returns 200 with the fake', async () => {
+  const calls = [];
+  await withServer(async (port) => {
+    const res = await get(port, '/api/authoritative?domain=Example.com&type=A');
+    assert.equal(res.status, 200);
+    const body = JSON.parse(res.body);
+    assert.equal(body.input, 'Example.com');
+    assert.equal(body.name, 'example.com');
+    assert.equal(body.zone, 'example.com');
+    assert.equal(body.results.length, 1);
+    assert.equal(body.results[0].nameserver, 'ns1.example.com');
+    assert.equal(body.results[0].serial, 7);
+    assert.equal(body.consensus.allAgree, true);
+    assert.equal(body.serials.allMatch, true);
+    assert.deepEqual(body.warnings, []);
+    for (const c of calls) assert.equal(c.transport, 'tcp');
+  }, { query: authoritativeFake(calls) });
+});
+
+test('/api/authoritative gives 422 when no zone is found', async () => {
+  await withServer(async (port) => {
+    const res = await get(port, '/api/authoritative?domain=example.com&type=A');
+    assert.equal(res.status, 422);
+    assert.deepEqual(JSON.parse(res.body), { error: 'No nameservers found for this name' });
+  }, {
+    query: async () => ({ rcodeName: 'NOERROR', flags: { rcode: 0, aa: false }, answers: [], ms: 1 }),
+  });
+});

@@ -88,7 +88,7 @@ test('rejections: timeout and other errors never reject', async () => {
   assert.equal(to.ttl, null);
   assert.equal(typeof to.ms, 'number');
   const ref = await run(async () => { const e = new Error('connect refused'); e.code = 'ECONNREFUSED'; throw e; });
-  assert.equal(ref.status, 'error');
+  assert.equal(ref.status, 'unreachable');
   assert.equal(ref.error, 'ECONNREFUSED');
   const plain = await run(async () => { throw new Error('boom'); });
   assert.equal(plain.status, 'error');
@@ -204,4 +204,40 @@ test('lookupAll: outlier and timeout', async () => {
   assert.equal(consensus.participating, 3);
   assert.equal(consensus.agreeing, 2);
   assert.equal(consensus.allAgree, false);
+});
+
+test('authoritative flag mirrors the AA bit and is false on errors', async () => {
+  const yes = await run(async () => resp([rec('A', '1.1.1.1')], 0, { flags: { aa: true } }));
+  assert.equal(yes.authoritative, true);
+  const no = await run(async () => resp([rec('A', '1.1.1.1')]));
+  assert.equal(no.authoritative, false);
+  const failed = await run(async () => { throw Object.assign(new Error('x'), { code: 'ECONNRESET' }); });
+  assert.equal(failed.authoritative, false);
+  assert.equal(failed.status, 'error');
+  const sf = await run(async () => resp([], 2, { flags: { aa: true } }));
+  assert.equal(sf.status, 'error');
+});
+
+test('unreachable status for network errors, error code kept', async () => {
+  for (const code of ['ENETUNREACH', 'EHOSTUNREACH', 'EADDRNOTAVAIL', 'ECONNREFUSED', 'EAFNOSUPPORT']) {
+    const r = await run(async () => { throw Object.assign(new Error(`connect ${code}`), { code }); });
+    assert.equal(r.status, 'unreachable', code);
+    assert.equal(r.error, code);
+    assert.equal(r.authoritative, false);
+  }
+  const other = await run(async () => { throw Object.assign(new Error('reset'), { code: 'ECONNRESET' }); });
+  assert.equal(other.status, 'error');
+});
+
+test('compareResults: unreachable and lame rows are excluded', () => {
+  const rows = [
+    row('ok', ['1']), row('ok', ['1']), row('unreachable', []),
+    { status: 'ok', answers: ['9'], lame: true },
+    { status: 'ok', answers: ['1'], lame: false },
+  ];
+  const c = compareResults(rows);
+  assert.deepEqual(rows.map((r) => r.differs), [false, false, false, false, false]);
+  assert.equal(c.participating, 3);
+  assert.equal(c.total, 5);
+  assert.equal(c.allAgree, true);
 });
