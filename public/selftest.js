@@ -81,6 +81,12 @@ function renderRuntime(runtime) {
     'Node ' + runtime.node + ', listening on ' + runtime.listeningOn +
       (runtime.portEnv === null ? ' (PORT not set, using the default)' : ' (PORT=' + runtime.portEnv + ')'),
   ];
+  lines.push(
+    'Client address seen as ' + runtime.clientKey +
+      ' (X-Forwarded-For: ' + (runtime.forwardedFor === null ? 'none' : runtime.forwardedFor) +
+      ', X-Real-IP: ' + (runtime.realIp === null ? 'none' : runtime.realIp) +
+      ', socket: ' + (runtime.remoteAddress === null ? 'none' : runtime.remoteAddress) + ')'
+  );
   lines.forEach(function (text) {
     summaryBox.appendChild(el('p', 'summary-item', text));
   });

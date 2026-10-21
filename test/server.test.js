@@ -14,7 +14,9 @@ const RESOLVERS = [
 ];
 
 const SECURITY_HEADERS = {
-  'content-security-policy': "default-src 'self'",
+  'content-security-policy': "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'",
+  'strict-transport-security': 'max-age=31536000',
+  'permissions-policy': 'camera=(), microphone=(), geolocation=()',
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
   'x-frame-options': 'DENY',
@@ -214,14 +216,15 @@ test('security headers are present on 401, 404 and 400 responses', async () => {
   });
 });
 
-test('non-GET requests return 404 with auth and 401 without (healthz is GET only)', async () => {
+test('non-GET requests return 405 with auth and 401 without (healthz is GET only)', async () => {
   await withServer(async (port) => {
     const anon = await request(port, 'POST', '/healthz');
     assert.equal(anon.status, 401);
 
     const authed = await request(port, 'POST', '/healthz', { Authorization: AUTH });
-    assert.equal(authed.status, 404);
-    assert.deepEqual(JSON.parse(authed.body), { error: 'not found' });
+    assert.equal(authed.status, 405);
+    assert.equal(authed.headers.allow, 'GET');
+    assert.deepEqual(JSON.parse(authed.body), { error: 'method not allowed' });
   });
 });
 
@@ -323,4 +326,241 @@ test('/api/email returns the combined result, allowing dotted selectors', async 
     const noSel = JSON.parse((await get(port, '/api/email?domain=example.com')).body);
     assert.equal(noSel.dkim, null);
   }, { query: fakeQuery(calls), checkSpf: stubSpf });
+});
+
+// ---- Phase 4: rate limits, concurrency, headers and methods ----
+
+const BAD = 'Basic ' + Buffer.from('admin:wrong-password-1').toString('base64');
+const LOOKUP = '/api/lookup?domain=example.com&type=A';
+
+test('failed auth is locked out with 429 and Retry-After, even with correct credentials', async () => {
+  await withServer(async (port) => {
+    for (let i = 0; i < 3; i++) {
+      const res = await request(port, 'GET', '/', { Authorization: BAD });
+      assert.equal(res.status, 401);
+    }
+    const locked = await get(port, '/');
+    assert.equal(locked.status, 429);
+    assert.deepEqual(JSON.parse(locked.body), { error: 'Too many failed sign-in attempts. Try again later.' });
+    assert.ok(Number(locked.headers['retry-after']) > 0);
+    assert.equal(locked.headers['cache-control'], 'no-store');
+    assert.equal((await getAnon(port, '/healthz')).status, 200, 'healthz is exempt');
+    assert.equal((await request(port, 'GET', '/healthz', { Authorization: BAD })).status, 200);
+  }, { limits: { failedAuthPer15Min: 3 } });
+});
+
+test('failed auth lockout is per client', async () => {
+  await withServer(async (port) => {
+    await request(port, 'GET', '/', { Authorization: BAD, 'X-Forwarded-For': '1.1.1.1' });
+    const locked = await request(port, 'GET', '/', { Authorization: AUTH, 'X-Forwarded-For': '1.1.1.1' });
+    assert.equal(locked.status, 429);
+    const other = await request(port, 'GET', '/', { Authorization: AUTH, 'X-Forwarded-For': '2.2.2.2' });
+    assert.equal(other.status, 200);
+  }, { limits: { failedAuthPer15Min: 1 } });
+});
+
+test('API rate limit gives 429; static files and healthz are not counted', async () => {
+  await withServer(async (port) => {
+    for (let i = 0; i < 5; i++) assert.equal((await get(port, '/index.html')).status, 200);
+    for (let i = 0; i < 5; i++) assert.equal((await getAnon(port, '/healthz')).status, 200);
+    assert.equal((await get(port, LOOKUP)).status, 200);
+    assert.equal((await get(port, LOOKUP)).status, 200);
+    const res = await get(port, LOOKUP);
+    assert.equal(res.status, 429);
+    const body = JSON.parse(res.body);
+    assert.match(body.error, /^Rate limit reached: 2 requests per minute\. Try again in \d+ seconds\.$/);
+    assert.ok(Number(res.headers['retry-after']) >= 1);
+    assert.equal(res.headers['cache-control'], 'no-store');
+    assert.equal((await get(port, '/index.html')).status, 200);
+    assert.equal((await getAnon(port, '/healthz')).status, 200);
+  }, { limits: { apiPerMinute: 2 } });
+});
+
+// A query that blocks until release() is called.
+function blockingQuery() {
+  const waiters = [];
+  const fn = (args) => new Promise((resolve) => {
+    waiters.push(() => resolve({
+      rcodeName: 'NOERROR',
+      flags: { tc: false },
+      answers: [{ name: 'example.com', type: 'A', class: 1, ttl: 60, data: '1.2.3.4' }],
+      ms: 1,
+    }));
+  });
+  fn.release = () => waiters.splice(0).forEach((w) => w());
+  fn.pending = () => waiters.length;
+  return fn;
+}
+
+async function waitFor(cond) {
+  for (let i = 0; i < 200 && !cond(); i++) await new Promise((r) => setTimeout(r, 5));
+  assert.ok(cond(), 'condition not met in time');
+}
+
+test('concurrency cap gives 429 and frees the slot afterwards', async () => {
+  const q = blockingQuery();
+  await withServer(async (port) => {
+    const first = get(port, LOOKUP);
+    await waitFor(() => q.pending() > 0);
+    const rejected = await get(port, LOOKUP);
+    assert.equal(rejected.status, 429);
+    assert.deepEqual(JSON.parse(rejected.body), { error: 'Too many lookups in progress. Wait for them to finish.' });
+    assert.equal(rejected.headers['cache-control'], 'no-store');
+    q.release();
+    assert.equal((await first).status, 200);
+    const again = get(port, LOOKUP);
+    await waitFor(() => q.pending() > 0);
+    q.release();
+    assert.equal((await again).status, 200);
+  }, { query: q, resolvers: [RESOLVERS[0]], limits: { maxConcurrentApiPerClient: 1 } });
+});
+
+test('global concurrency cap applies across clients', async () => {
+  const q = blockingQuery();
+  await withServer(async (port) => {
+    const first = request(port, 'GET', LOOKUP, { Authorization: AUTH, 'X-Forwarded-For': '1.1.1.1' });
+    await waitFor(() => q.pending() > 0);
+    const rejected = await request(port, 'GET', LOOKUP, { Authorization: AUTH, 'X-Forwarded-For': '2.2.2.2' });
+    assert.equal(rejected.status, 429);
+    q.release();
+    assert.equal((await first).status, 200);
+  }, { query: q, resolvers: [RESOLVERS[0]], limits: { maxConcurrentApi: 1, maxConcurrentApiPerClient: 5 } });
+});
+
+test('concurrency slots are released after handler errors', async () => {
+  const failing = { ...fakeQuery([]) };
+  await withServer(async (port) => {
+    for (let i = 0; i < 4; i++) {
+      // Missing domain returns 400 early; an invalid selector too. Both must free the slot.
+      assert.equal((await get(port, '/api/lookup')).status, 400);
+    }
+    for (let i = 0; i < 3; i++) {
+      assert.equal((await get(port, LOOKUP)).status, 200);
+    }
+  }, { query: failing, limits: { maxConcurrentApiPerClient: 1, maxConcurrentApi: 1 } });
+
+  const boom = async () => { throw new Error('kaboom'); };
+  await withServer(async (port) => {
+    // The injected query throws; per-server errors are reported, never leaving a slot held.
+    for (let i = 0; i < 3; i++) {
+      const res = await get(port, LOOKUP);
+      assert.ok(res.status === 200 || res.status === 500);
+    }
+    assert.equal((await get(port, '/api/lookup')).status, 400, 'slot is free, so not 429');
+  }, { query: boom, resolvers: [RESOLVERS[0]], limits: { maxConcurrentApiPerClient: 1, maxConcurrentApi: 1 } });
+});
+
+test('outbound queries are capped and queued, not rejected', async () => {
+  let running = 0;
+  let peak = 0;
+  const q = async () => {
+    running += 1;
+    peak = Math.max(peak, running);
+    await new Promise((r) => setTimeout(r, 10));
+    running -= 1;
+    return { rcodeName: 'NOERROR', flags: { tc: false }, answers: [], ms: 1 };
+  };
+  await withServer(async (port) => {
+    const res = await get(port, LOOKUP);
+    assert.equal(res.status, 200);
+    assert.equal(JSON.parse(res.body).results.length, 4);
+    assert.equal(peak, 1);
+  }, {
+    query: q,
+    resolvers: [1, 2, 3, 4].map((n) => ({ name: `R${n}`, address: `10.0.0.${n}` })),
+    timeout: 5000,
+    limits: { maxOutboundQueries: 1 },
+  });
+});
+
+test('security headers appear on 200, 401, 404, 405 and 429', async () => {
+  await withServer(async (port) => {
+    const responses = {
+      200: await get(port, '/index.html'),
+      401: await getAnon(port, '/'),
+      404: await get(port, '/nope.html'),
+      405: await request(port, 'POST', '/api/lookup', { Authorization: AUTH }),
+    };
+    await request(port, 'GET', '/', { Authorization: BAD });
+    await request(port, 'GET', '/', { Authorization: BAD });
+    responses[429] = await get(port, '/');
+    for (const [status, res] of Object.entries(responses)) {
+      assert.equal(res.status, Number(status));
+      for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+        assert.equal(res.headers[name], value, `${name} on ${status}`);
+      }
+    }
+    assert.equal(responses[401].headers['cache-control'], 'no-store');
+    assert.equal(responses[429].headers['cache-control'], 'no-store');
+  }, { limits: { failedAuthPer15Min: 2 } });
+});
+
+test('hsts has no includeSubDomains and /api responses are no-store', async () => {
+  await withServer(async (port) => {
+    const res = await get(port, LOOKUP);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers['cache-control'], 'no-store');
+    assert.equal(res.headers['strict-transport-security'], 'max-age=31536000');
+    assert.equal((await get(port, '/api/nothing')).headers['cache-control'], 'no-store');
+  });
+});
+
+test('non-GET on a known route gives 405 with Allow; unknown routes stay 404', async () => {
+  await withServer(async (port) => {
+    for (const method of ['POST', 'PUT', 'DELETE']) {
+      const res = await request(port, method, '/api/lookup', { Authorization: AUTH });
+      assert.equal(res.status, 405);
+      assert.equal(res.headers.allow, 'GET');
+    }
+    assert.equal((await request(port, 'POST', '/healthz', { Authorization: AUTH })).status, 405);
+    assert.equal((await request(port, 'POST', '/nowhere', { Authorization: AUTH })).status, 404);
+    assert.equal((await request(port, 'POST', '/api/lookup')).status, 401, 'auth is checked first');
+  });
+});
+
+test('selftest runtime reports how the client address was seen', async () => {
+  await withServer(async (port) => {
+    const res = await request(port, 'GET', '/api/selftest', {
+      Authorization: AUTH,
+      'X-Forwarded-For': '9.9.9.9, 203.0.113.7',
+      'X-Real-IP': '203.0.113.8',
+    });
+    const rt = JSON.parse(res.body).runtime;
+    assert.equal(rt.forwardedFor, '9.9.9.9, 203.0.113.7');
+    assert.equal(rt.realIp, '203.0.113.8');
+    assert.equal(rt.clientKey, '203.0.113.7');
+    assert.ok(rt.remoteAddress === null || typeof rt.remoteAddress === 'string');
+    assert.equal(JSON.stringify(rt).includes('Basic'), false);
+
+    const plain = JSON.parse((await get(port, '/api/selftest')).body).runtime;
+    assert.equal(plain.forwardedFor, null);
+    assert.equal(plain.realIp, null);
+  });
+});
+
+test('requests without credentials never count as failed sign-ins', async () => {
+  await withServer(async (port) => {
+    // Browsers send no credentials until they have seen a 401, so these are normal.
+    for (let i = 0; i < 5; i++) assert.equal((await getAnon(port, '/')).status, 401);
+    assert.equal((await get(port, '/')).status, 200);
+  }, { limits: { failedAuthPer15Min: 2 } });
+});
+
+test('the shared "unknown" client key is never locked out', async () => {
+  // Over a Unix socket with no proxy headers, every client is 'unknown'. Locking that
+  // key out would let anyone lock out the real user.
+  const os = require('node:os');
+  const path = require('node:path');
+  const socketPath = path.join(os.tmpdir(), `dnschecker-test-${process.pid}.sock`);
+  const server = createServer({ password: PASSWORD, resolvers: RESOLVERS, query: fakeQuery([]), limits: { failedAuthPer15Min: 1 } });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const viaSocket = (headers) => new Promise((resolve, reject) => {
+    http.get({ socketPath, path: '/', headers }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); }).on('error', reject);
+  });
+  try {
+    for (let i = 0; i < 3; i++) assert.equal(await viaSocket({ Authorization: BAD }), 401);
+    assert.equal(await viaSocket({ Authorization: AUTH }), 200);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
