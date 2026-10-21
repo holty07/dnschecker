@@ -53,7 +53,9 @@ There is no build step and no install step.
 - `lib/`: one module per concern (`validate`, `resolve`, `authoritative`, `email`, `spf`, `auth`,
   `ratelimit`). Keep modules pure where possible and pass I/O in as parameters (dependency
   injection) so tests can supply a fake resolver.
-- `public/`: `index.html`, `app.js`, `style.css`. No framework and no bundler.
+- `public/`: `index.html` + `app.js` (lookup page: public, authoritative and email modes),
+  `login.html` + `login.js`, `selftest.html` + `selftest.js`, and a shared `style.css`. No framework
+  and no bundler. Recent lookups live only in the browser's `localStorage`.
 - `resolvers.json`: the resolver list. Edit it without touching code.
 - `test/`: `node:test` files named `*.test.js`.
 
@@ -84,9 +86,10 @@ These came from reviewing `docs/PLAN.md` against Node's actual behaviour and the
 3. **PTR needs IP input.** `validate.js` rejects IP literals, but PTR lookups take an IP. Accept an
    IPv4 or IPv6 literal **only** when `type=PTR`, and convert it to its `in-addr.arpa` or
    `ip6.arpa` name.
-4. **Rate limiting behind a proxy.** SiteGround probably proxies requests, so `req.socket.remoteAddress`
-   may be the proxy's address. Check whether `X-Forwarded-For` is set and trustworthy before keying
-   the limiter on it.
+4. **Client address behind the proxy (confirmed 2026-10-21).** The socket address is empty (Unix
+   socket); nginx sends `X-Forwarded-For` (two entries, both the client IP) and `X-Real-IP`.
+   `clientKey` uses the LAST `X-Forwarded-For` entry. The sign-in lockout never applies to the shared
+   `'unknown'` key, and only requests that send wrong credentials count as failures.
 5. **No outbound IPv6 on SiteGround** (observed 2026-10-21: every IPv6 nameserver address for
    immersemarketing.com.au was `unreachable` in authoritative mode). Keep reporting IPv6 addresses as
    `unreachable` and excluding them from the comparison; don't count them as disagreeing. A
@@ -110,6 +113,7 @@ These came from reviewing `docs/PLAN.md` against Node's actual behaviour and the
   entries, not the app's console output, so `/api/selftest` also reports the Node version, the
   listening port and the `PORT` value under `runtime`.
 - Answered: SiteGround runs Node 22.23.2; `engines` is `>=22`.
-- What start command does it expect (`npm start` or `node server.js`)? Provide both: a `start`
-  script that runs `node server.js`.
+- Still open: which start command SiteGround uses (`npm start` and `node server.js` both work), where
+  in Site Tools environment variables are set, and whether a client-supplied `X-Forwarded-For` is
+  overwritten or appended to by nginx.
 - Answered: `main` is the deploy branch, and every merge deploys straight to production.
