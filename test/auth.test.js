@@ -2,7 +2,14 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { MIN_PASSWORD_LENGTH, assertStrongPassword, createAuthChecker } = require('../lib/auth');
+const {
+  MIN_PASSWORD_LENGTH,
+  COOKIE_NAME,
+  assertStrongPassword,
+  createAuthChecker,
+  createSessionManager,
+  parseCookies,
+} = require('../lib/auth');
 
 const PASSWORD = 'correct-horse-9';
 
@@ -104,4 +111,120 @@ test('createAuthChecker never throws on odd input', () => {
 
 test('createAuthChecker requires a string password', () => {
   assert.throws(() => createAuthChecker({}), TypeError);
+});
+
+test('checkCredentials compares both username and password', () => {
+  const { checkCredentials } = createAuthChecker({ password: PASSWORD });
+  assert.equal(checkCredentials('admin', PASSWORD), true);
+  assert.equal(checkCredentials('admin', PASSWORD + 'x'), false);
+  assert.equal(checkCredentials('root', PASSWORD), false);
+  assert.equal(checkCredentials(null, PASSWORD), false);
+  assert.equal(checkCredentials('admin', undefined), false);
+});
+
+// ---- Sessions ----
+
+const DAY = 24 * 3600;
+
+function sessions(overrides = {}) {
+  const clock = { t: 1_800_000_000_000 };
+  const manager = createSessionManager({ password: PASSWORD, now: () => clock.t, ...overrides });
+  return { clock, manager };
+}
+
+test('an issued session verifies and has the documented shape', () => {
+  const { clock, manager } = sessions();
+  const value = manager.issue();
+  assert.match(value, /^v1\.\d+\.[0-9a-f]{16}\.[A-Za-z0-9_-]{43}$/);
+  assert.equal(Number(value.split('.')[1]), clock.t / 1000 + 30 * DAY);
+  assert.equal(manager.verify(value), true);
+  assert.notEqual(manager.issue(), value, 'each session has a fresh nonce');
+});
+
+test('sessions expire, and not before', () => {
+  const { clock, manager } = sessions({ maxAgeSeconds: 100 });
+  const value = manager.issue();
+  clock.t += 99_000;
+  assert.equal(manager.verify(value), true);
+  clock.t += 1_000;
+  assert.equal(manager.verify(value), false);
+});
+
+test('tampering with the expiry, nonce or signature fails', () => {
+  const { manager } = sessions();
+  const [v, exp, nonce, sig] = manager.issue().split('.');
+  const flip = (c) => (c === 'a' ? 'b' : 'a');
+  const cases = [
+    [v, String(Number(exp) + 1), nonce, sig],
+    [v, exp, flip(nonce[0]) + nonce.slice(1), sig],
+    [v, exp, nonce, flip(sig[0]) + sig.slice(1)],
+    ['v2', exp, nonce, sig],
+  ];
+  for (const parts of cases) assert.equal(manager.verify(parts.join('.')), false, parts.join('.'));
+});
+
+test('malformed and wrong-length values fail without throwing', () => {
+  const { manager } = sessions();
+  const good = manager.issue();
+  const [v, exp, nonce, sig] = good.split('.');
+  const bad = [
+    undefined, null, 42, {}, [], '', 'v1', 'v1...', `${good}.extra`, `${good}A`, good.slice(0, -1),
+    [v, exp, nonce, sig.slice(0, 20)].join('.'),
+    [v, exp, nonce.slice(1), sig].join('.'),
+    [v, '', nonce, sig].join('.'),
+    [v, '-5', nonce, sig].join('.'),
+    [v, '1e9', nonce, sig].join('.'),
+    ' ' + good,
+    'x'.repeat(100000),
+  ];
+  for (const value of bad) assert.equal(manager.verify(value), false, String(value).slice(0, 40));
+});
+
+test('a different password invalidates the session', () => {
+  const { manager } = sessions();
+  const other = createSessionManager({ password: 'another-long-password', now: () => 1_800_000_000_000 });
+  const value = manager.issue();
+  assert.equal(other.verify(value), false);
+  assert.equal(other.verify(other.issue()), true);
+});
+
+test('sessions are stateless: a new manager with the same password accepts them', () => {
+  const { manager } = sessions();
+  const value = manager.issue();
+  assert.equal(sessions().manager.verify(value), true);
+});
+
+test('cookie headers carry the security attributes', () => {
+  const { manager } = sessions();
+  const value = manager.issue();
+  assert.equal(
+    manager.cookieHeader(value),
+    `${COOKIE_NAME}=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${30 * DAY}`
+  );
+  assert.equal(
+    manager.clearCookieHeader(),
+    `${COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`
+  );
+});
+
+test('createSessionManager requires a password', () => {
+  assert.throws(() => createSessionManager({}), TypeError);
+  assert.throws(() => createSessionManager({ password: '' }), TypeError);
+});
+
+test('parseCookies reads pairs and ignores malformed parts', () => {
+  assert.deepEqual(parseCookies('a=1; b=2'), { a: '1', b: '2' });
+  assert.deepEqual(parseCookies('  a = 1 ;b=two=2;;novalue;=x; bad name=1; c="q"'), { a: '1', b: 'two=2', c: 'q' });
+  assert.deepEqual(parseCookies('a=1; a=2'), { a: '1' }, 'first occurrence wins');
+  assert.deepEqual(parseCookies('a='), { a: '' });
+  for (const header of [undefined, null, 5, '', ';;;', '=', ['a=1']]) assert.deepEqual(parseCookies(header), {});
+  assert.deepEqual(parseCookies('x'.repeat(9000) + '=1'), {});
+});
+
+test('parseCookies does not let a cookie name pollute the prototype', () => {
+  const cookies = parseCookies('__proto__=x; constructor=y; toString=z');
+  assert.equal(Object.getPrototypeOf(cookies), Object.prototype);
+  assert.equal(Object.hasOwn(cookies, '__proto__'), false);
+  assert.equal(cookies.constructor, 'y');
+  assert.equal(({}).x, undefined);
 });

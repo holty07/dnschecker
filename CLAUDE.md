@@ -80,7 +80,7 @@ These came from reviewing `docs/PLAN.md` against Node's actual behaviour and the
    `main` redeploys, so `/api/lookup` would be public from Phase 1. That contradicts the
    "not exposed as an open query endpoint" goal. Basic auth (`lib/auth.js`) and the startup
    password check move into Phase 1. Every route except `/healthz` requires auth, including
-   `/api/selftest`.
+   `/api/selftest`. Sign-in is a login form with a stateless HMAC-signed session cookie (password managers can't fill the native Basic prompt); Basic auth is still accepted for scripts.
 3. **PTR needs IP input.** `validate.js` rejects IP literals, but PTR lookups take an IP. Accept an
    IPv4 or IPv6 literal **only** when `type=PTR`, and convert it to its `in-addr.arpa` or
    `ip6.arpa` name.

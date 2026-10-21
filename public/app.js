@@ -496,6 +496,11 @@ function renderEmailSection(body) {
 function getJson(url) {
   return fetch(url, { cache: 'no-store', headers: { Accept: 'application/json' } }).then(function (res) {
     return res.json().catch(function () { return {}; }).then(function (body) {
+      if (res.status === 401) {
+        // The session has expired or was never started.
+        window.location.assign('/login.html?next=' + encodeURIComponent(window.location.pathname));
+        throw new Error('Sign in required');
+      }
       if (!res.ok) throw new Error(body.error || 'HTTP ' + res.status);
       return body;
     });

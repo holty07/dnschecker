@@ -6,7 +6,13 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { selftest } = require('./lib/selftest');
 const wire = require('./lib/wire');
-const { assertStrongPassword, createAuthChecker } = require('./lib/auth');
+const {
+  COOKIE_NAME,
+  assertStrongPassword,
+  createAuthChecker,
+  createSessionManager,
+  parseCookies,
+} = require('./lib/auth');
 const { validateQuery } = require('./lib/validate');
 const { lookupAll } = require('./lib/resolve');
 const { checkAuthoritative } = require('./lib/authoritative');
@@ -21,7 +27,12 @@ const DEFAULT_RESOLVERS = require('./resolvers.json');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DEFAULT_TIMEOUT_MS = 3000;
-const REALM_HEADER = 'Basic realm="DNS Checker", charset="UTF-8"';
+const MAX_LOGIN_BODY = 4096;
+const MAX_NEXT_LENGTH = 2048;
+// Reachable without signing in. Basic auth's WWW-Authenticate header is never sent,
+// because it is what makes browsers show the native prompt.
+const PUBLIC_GET_PATHS = new Set(['/healthz', '/login.html', '/login.js', '/style.css']);
+const PUBLIC_POST_PATHS = new Set(['/login', '/logout']);
 
 const CONTENT_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -74,6 +85,68 @@ function sendText(res, status, text) {
     'Content-Length': Buffer.byteLength(text),
   });
   res.end(text);
+}
+
+function redirect(res, location, extraHeaders = {}) {
+  res.writeHead(303, { Location: location, 'Content-Length': 0, ...NO_STORE, ...extraHeaders });
+  res.end();
+}
+
+// Only same-site absolute paths are allowed as a post-login destination.
+function safeNext(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_NEXT_LENGTH) return '/';
+  if (!value.startsWith('/') || value.startsWith('//') || value.startsWith('/\\')) return '/';
+  if (value.includes('\\') || /[\u0000-\u001f\u007f]/.test(value)) return '/';
+  return value;
+}
+
+function loginUrl(next, error) {
+  const params = [];
+  if (error) params.push(`error=${error}`);
+  if (next !== undefined) params.push(`next=${encodeURIComponent(next)}`);
+  return `/login.html${params.length ? `?${params.join('&')}` : ''}`;
+}
+
+// Cross-site request guard for POST /login and /logout.
+// Sec-Fetch-Site is set by the browser and can't be forged by a page, so when present
+// it decides: only same-origin is accepted. It also doesn't depend on the Host header,
+// which a proxy could rewrite. Older clients without it fall back to Origin; with
+// Referrer-Policy: no-referrer browsers send "Origin: null", which is refused here.
+// No Origin at all (curl, scripts) is allowed; they hold no session cookie to abuse.
+function originAllowed(req) {
+  const site = req.headers['sec-fetch-site'];
+  if (site !== undefined) return site === 'same-origin';
+  const origin = req.headers.origin;
+  if (origin === undefined) return true;
+  if (origin === 'null') return false;
+  try {
+    return typeof origin === 'string' && new URL(origin).host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
+function readLoginForm(req) {
+  return new Promise((resolve) => {
+    const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    if (type !== 'application/x-www-form-urlencoded') return resolve({ status: 415 });
+    const declared = Number(req.headers['content-length']);
+    if (Number.isFinite(declared) && declared > MAX_LOGIN_BODY) return resolve({ status: 413 });
+    const chunks = [];
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > MAX_LOGIN_BODY) {
+        chunks.length = 0;
+        req.removeAllListeners('data');
+        req.resume();
+        return resolve({ status: 413 });
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve({ form: new URLSearchParams(Buffer.concat(chunks).toString('utf8')) }));
+    req.on('error', () => resolve({ status: 400 }));
+  });
 }
 
 function parseTimeout(value) {
@@ -231,6 +304,7 @@ async function serveStatic(res, pathname) {
   res.writeHead(200, {
     'Content-Type': contentType,
     'Content-Length': data.length,
+    ...(relative === '/login.html' ? NO_STORE : {}),
   });
   res.end(data);
 }
@@ -248,13 +322,11 @@ function createServer(options = {}) {
   // Refuse to build a server without a strong password, even when used programmatically.
   assertStrongPassword(password);
   const checkAuth = createAuthChecker({ password });
+  const session = createSessionManager({ password });
 
   // Cap outbound DNS connections. Excess queries wait their turn rather than fail.
   const outbound = createSemaphore(limits.maxOutboundQueries);
   const query = (...args) => outbound.run(() => rawQuery(...args));
-
-  const routes = buildRoutes({ resolvers, query, timeout, checkSpf });
-  const knownPaths = new Set([...routes.keys()].map((k) => k.slice(k.indexOf(' ') + 1)));
 
   const failedAuth = createRateLimiter({ limit: limits.failedAuthPer15Min, windowMs: 15 * 60 * 1000 });
   const apiRate = createRateLimiter({ limit: limits.apiPerMinute, windowMs: 60 * 1000 });
@@ -290,11 +362,43 @@ function createServer(options = {}) {
     return crypto.createHash('sha256').update(key).update(salt).digest('hex').slice(0, 8);
   }
 
+  // Only a client with a usable address can be locked out (see the note in the request handler).
+  const lockState = (key) => (key !== 'unknown' ? failedAuth.peek(key) : { allowed: true });
+
+  async function handleLogin(req, res) {
+    if (!originAllowed(req)) return sendJson(res, 403, { error: 'Cross-origin request refused' }, NO_STORE);
+    const key = clientKey(req);
+    const lockable = key !== 'unknown';
+    const parsed = await readLoginForm(req);
+    if (parsed.status) {
+      const messages = { 413: 'Request too large', 415: 'Unsupported content type', 400: 'Bad request' };
+      return sendJson(res, parsed.status, { error: messages[parsed.status] }, { ...NO_STORE, Connection: 'close' });
+    }
+    const next = safeNext(parsed.form.get('next'));
+    // A locked-out client is refused without its credentials being looked at.
+    if (!lockState(key).allowed) return redirect(res, loginUrl(next, 'locked'));
+    if (checkAuth.checkCredentials(parsed.form.get('username'), parsed.form.get('password'))) {
+      return redirect(res, next, { 'Set-Cookie': session.cookieHeader(session.issue()) });
+    }
+    if (lockable) failedAuth.hit(key);
+    return redirect(res, loginUrl(next, '1'));
+  }
+
+  async function handleLogout(req, res) {
+    if (!originAllowed(req)) return sendJson(res, 403, { error: 'Cross-origin request refused' }, NO_STORE);
+    return redirect(res, '/login.html', { 'Set-Cookie': session.clearCookieHeader() });
+  }
+
+  const routes = buildRoutes({ resolvers, query, timeout, checkSpf });
+  routes.set('POST /login', handleLogin);
+  routes.set('POST /logout', handleLogout);
+  const allowedMethod = new Map([...routes.keys()].map((k) => k.split(' ').reverse()));
+
   async function handle(req, res, pathname) {
     const route = routes.get(`${req.method} ${pathname}`);
     if (route) return route(req, res);
-    if (knownPaths.has(pathname)) {
-      return sendJson(res, 405, { error: 'method not allowed' }, { Allow: 'GET' });
+    if (allowedMethod.has(pathname)) {
+      return sendJson(res, 405, { error: 'method not allowed' }, { Allow: allowedMethod.get(pathname) });
     }
     if (req.method === 'GET') return serveStatic(res, pathname);
     return sendJson(res, 404, { error: 'not found' });
@@ -321,32 +425,39 @@ function createServer(options = {}) {
 
     Promise.resolve()
       .then(() => {
-        const isPublic = req.method === 'GET' && pathname === '/healthz';
+        const isPublic =
+          (req.method === 'GET' && PUBLIC_GET_PATHS.has(pathname)) ||
+          (req.method === 'POST' && PUBLIC_POST_PATHS.has(pathname));
+        if (isPublic && pathname === '/login.html') res.setHeader('Cache-Control', 'no-store');
         if (!isPublic) {
-          // Locked-out clients are refused before their credentials are looked at.
-          // When no client address is visible (no proxy header, Unix socket), every
-          // request shares the key 'unknown'; locking that out would let anyone lock
-          // out the real user, so the lockout only applies to identified clients.
-          const lockable = key !== 'unknown';
-          const lock = lockable ? failedAuth.peek(key) : { allowed: true };
-          if (!lock.allowed) {
-            return sendJson(
-              res,
-              429,
-              { error: 'Too many failed sign-in attempts. Try again later.' },
-              { ...NO_STORE, 'Retry-After': String(lock.retryAfterSeconds) }
-            );
-          }
-          if (!checkAuth(req)) {
-            // Browsers send no credentials on the first request and only prompt after
-            // the 401, so only a wrong password counts as a failed attempt.
-            if (lockable && req.headers.authorization) failedAuth.hit(key);
-            return sendJson(
-              res,
-              401,
-              { error: 'authentication required' },
-              { ...NO_STORE, 'WWW-Authenticate': REALM_HEADER }
-            );
+          // A valid session cookie proves the password was known, so it is accepted
+          // without touching the failed-attempt counter.
+          const cookie = parseCookies(req.headers.cookie)[COOKIE_NAME];
+          if (!(cookie !== undefined && session.verify(cookie))) {
+            // Basic credentials are guesses, so a locked-out client is refused before
+            // they are looked at. When no client address is visible (no proxy header,
+            // Unix socket), every request shares the key 'unknown'; locking that out
+            // would let anyone lock out the real user, so the lockout only applies to
+            // identified clients.
+            const lockable = key !== 'unknown';
+            const basicSupplied = Boolean(req.headers.authorization);
+            if (basicSupplied) {
+              const lock = lockState(key);
+              if (!lock.allowed) {
+                return sendJson(
+                  res,
+                  429,
+                  { error: 'Too many failed sign-in attempts. Try again later.' },
+                  { ...NO_STORE, 'Retry-After': String(lock.retryAfterSeconds) }
+                );
+              }
+            }
+            if (!checkAuth(req)) {
+              // Only supplied (wrong) credentials count as a failed attempt.
+              if (lockable && basicSupplied) failedAuth.hit(key);
+              if (req.method === 'GET' && !isApi) return redirect(res, loginUrl(safeNext(req.url)));
+              return sendJson(res, 401, { error: 'Sign in required' }, NO_STORE);
+            }
           }
         }
 
