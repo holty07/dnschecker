@@ -8,7 +8,7 @@ The full brief is in [docs/PLAN.md](docs/PLAN.md). Project rules are in [CLAUDE.
 
 **Status:** Phases 1 to 4 are built: resolver comparison, authoritative checks, the email DNS panel, and rate limiting and hardening. Phase 5 (polish) is next.
 
-Endpoints (all need HTTP Basic auth except `/healthz`):
+Endpoints (all need sign-in, by session cookie or HTTP Basic auth, except `/healthz`):
 
 - `/` is the lookup page. Enter a domain or IP and choose a record type, or "All common" for every common type at once.
 - `GET /api/lookup?domain=&type=` returns the per-resolver results and the consensus as JSON.
@@ -19,16 +19,19 @@ Endpoints (all need HTTP Basic auth except `/healthz`):
 
 ## Authentication
 
-Every route except `/healthz` requires HTTP Basic auth. The username is `admin`. The password comes from the `AUTH_PASSWORD` environment variable.
+Every route except `/healthz` and the sign-in page needs authentication. Open the site and you are sent to a sign-in form (username `admin`, password from the `AUTH_PASSWORD` environment variable), so password managers can fill it. A successful sign-in sets a session cookie that lasts 30 days. Use the "Sign out" button in the page header to end it sooner.
 
 - `AUTH_PASSWORD` is **required**. The server refuses to start if it is unset or shorter than 12 characters, and logs the reason to stderr.
-- Use a long random password. Browsers cache Basic credentials for the session, so sign out by closing the browser.
+- **Session cookie:** `dnschecker_session` is `HttpOnly`, `Secure` and `SameSite=Strict`. It is signed with a key derived from `AUTH_PASSWORD`, and nothing is stored on the server, so sessions survive restarts. **Changing `AUTH_PASSWORD` signs everyone out.** There is no way to revoke a single session before it expires, other than changing the password.
+- **Scripts and curl:** HTTP Basic auth (`curl -u admin:... https://host/api/lookup?...`) still works on every route. The server never sends a `WWW-Authenticate` header, so browsers show the form rather than the native prompt. Unauthenticated API calls get `401` JSON; unauthenticated page requests get a redirect to `/login.html`.
+- **Login form checks:** the form accepts only small `application/x-www-form-urlencoded` bodies, refuses a request whose `Origin` host differs from its `Host` header, and only redirects to a same-site path after sign-in.
+- Use a long random password. The limits below apply to the form as well as to Basic auth.
 
 ## Limits and hardening
 
 | Limit | Default |
 |---|---|
-| Failed sign-ins (wrong credentials only) | 20 per 15 minutes per client, then 429 |
+| Failed sign-ins (wrong password on the form or in a Basic header) | 20 per 15 minutes per client, then 429 |
 | API requests | 60 per minute per client (page files are not counted) |
 | Lookups in progress | 10 per client, 20 in total, then 429 |
 | Outbound DNS connections | 64 at once (extra queries wait) |
@@ -86,7 +89,7 @@ Items still marked unverified need confirming. Record the answer here once check
 - **Logs.** Statistics > Error Log shows nginx entries, not the app's console output. Use `/selftest.html` for runtime details.
 - **Start command.** Does the platform expect `npm start` or `node server.js`? Status: unverified – to confirm on deploy. A `start` script runs `node server.js`, so either works if the platform accepts it.
 - **Outbound IPv6.** **Observed 2026-10-21:** in authoritative mode, every IPv6 nameserver address for immersemarketing.com.au showed as unreachable, while IPv4 worked. SiteGround appears to have no outbound IPv6, so IPv6 addresses are shown as unreachable and left out of the comparison. A nameserver with only IPv6 addresses can't be checked from this host.
-- **Behind a proxy.** Does SiteGround's nginx set `X-Forwarded-For` or `X-Real-IP`? Status: unverified. `/selftest.html` shows what the app sees ("Client address seen as …"), so record the answer here after deploying Phase 4.
+- **Behind a proxy.** **Confirmed 2026-10-21 from `/selftest.html`:** the socket address is empty (Unix socket), `X-Forwarded-For` arrives with two entries (both the client's IP, which suggests two proxy layers) and `X-Real-IP` matches. The limiter uses the last `X-Forwarded-For` entry, so per-client limits and the sign-in lockout identify clients correctly. Not yet checked: whether a client-supplied `X-Forwarded-For` is overwritten or appended to. The last-entry rule is correct as long as the nearest proxy appends.
 
 ### Phase 0 self-test results (2026-10-20)
 

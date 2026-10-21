@@ -9,7 +9,10 @@
 <body>
   <main>
     <p class="back"><a href="/">&larr; Back to lookup</a></p>
-    <h1>DNS Checker – Phase 0 self-test</h1>
+    <div class="page-header">
+      <h1>DNS Checker – Phase 0 self-test</h1>
+      <form method="post" action="/logout" class="signout-form"><button type="submit" class="secondary">Sign out</button></form>
+    </div>
     <p>Queries <code>example.com</code> (A) against each resolver, over UDP and TCP separately.</p>
     <button type="button" id="run">Run self-test</button>
     <p id="status" role="status"></p>

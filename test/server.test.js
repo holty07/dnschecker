@@ -7,7 +7,6 @@ const { createServer } = require('../server');
 
 const PASSWORD = 'correct-horse-9';
 const AUTH = 'Basic ' + Buffer.from(`admin:${PASSWORD}`).toString('base64');
-const REALM = 'Basic realm="DNS Checker", charset="UTF-8"';
 const RESOLVERS = [
   { name: 'Alpha', address: '10.0.0.1' },
   { name: 'Beta', address: '10.0.0.2' },
@@ -37,7 +36,7 @@ function fakeQuery(calls) {
 
 // Uses the raw request-target, so paths such as /../package.json reach the
 // server unchanged (the URL class would normalise them on the client side).
-function request(port, method, rawPath, headers = {}) {
+function request(port, method, rawPath, headers = {}, body) {
   return new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port, method, path: rawPath, headers }, (res) => {
       const chunks = [];
@@ -49,7 +48,7 @@ function request(port, method, rawPath, headers = {}) {
       }));
     });
     req.on('error', reject);
-    req.end();
+    req.end(body);
   });
 }
 
@@ -90,15 +89,28 @@ test('healthz returns ok without auth, with the security headers', async () => {
   });
 });
 
-test('/, /api/selftest and /api/lookup return 401 without auth', async () => {
+test('/api/selftest and /api/lookup return 401 JSON without auth, and never ask for Basic auth', async () => {
   await withServer(async (port) => {
-    for (const p of ['/', '/api/selftest', '/api/lookup?domain=example.com&type=A', '/style.css']) {
+    for (const p of ['/api/selftest', '/api/lookup?domain=example.com&type=A']) {
       const res = await getAnon(port, p);
       assert.equal(res.status, 401, `expected 401 for ${p}`);
-      assert.equal(res.headers['www-authenticate'], REALM, `WWW-Authenticate for ${p}`);
+      assert.equal(res.headers['www-authenticate'], undefined, `WWW-Authenticate for ${p}`);
+      assert.equal(res.headers['cache-control'], 'no-store');
       assert.match(res.headers['content-type'], /^application\/json/);
-      assert.deepEqual(JSON.parse(res.body), { error: 'authentication required' });
+      assert.deepEqual(JSON.parse(res.body), { error: 'Sign in required' });
     }
+  });
+});
+
+test('pages without auth redirect to the login page', async () => {
+  await withServer(async (port) => {
+    const root = await getAnon(port, '/');
+    assert.equal(root.status, 303);
+    assert.equal(root.headers.location, '/login.html?next=%2F');
+    assert.equal(root.headers['www-authenticate'], undefined);
+    const page = await getAnon(port, '/selftest.html?x=1');
+    assert.equal(page.status, 303);
+    assert.equal(page.headers.location, '/login.html?next=%2Fselftest.html%3Fx%3D1');
   });
 });
 
@@ -106,7 +118,10 @@ test('wrong credentials return 401', async () => {
   await withServer(async (port) => {
     const wrong = 'Basic ' + Buffer.from(`admin:${PASSWORD}x`).toString('base64');
     const res = await request(port, 'GET', '/', { Authorization: wrong });
-    assert.equal(res.status, 401);
+    assert.equal(res.status, 303);
+    const api = await request(port, 'GET', LOOKUP, { Authorization: wrong });
+    assert.equal(api.status, 401);
+    assert.equal(api.headers['www-authenticate'], undefined);
   });
 });
 
@@ -220,6 +235,7 @@ test('non-GET requests return 405 with auth and 401 without (healthz is GET only
   await withServer(async (port) => {
     const anon = await request(port, 'POST', '/healthz');
     assert.equal(anon.status, 401);
+    assert.equal(anon.headers['www-authenticate'], undefined);
 
     const authed = await request(port, 'POST', '/healthz', { Authorization: AUTH });
     assert.equal(authed.status, 405);
@@ -337,7 +353,7 @@ test('failed auth is locked out with 429 and Retry-After, even with correct cred
   await withServer(async (port) => {
     for (let i = 0; i < 3; i++) {
       const res = await request(port, 'GET', '/', { Authorization: BAD });
-      assert.equal(res.status, 401);
+      assert.equal(res.status, 303);
     }
     const locked = await get(port, '/');
     assert.equal(locked.status, 429);
@@ -477,7 +493,7 @@ test('security headers appear on 200, 401, 404, 405 and 429', async () => {
   await withServer(async (port) => {
     const responses = {
       200: await get(port, '/index.html'),
-      401: await getAnon(port, '/'),
+      401: await getAnon(port, '/api/lookup'),
       404: await get(port, '/nope.html'),
       405: await request(port, 'POST', '/api/lookup', { Authorization: AUTH }),
     };
@@ -541,7 +557,7 @@ test('selftest runtime reports how the client address was seen', async () => {
 test('requests without credentials never count as failed sign-ins', async () => {
   await withServer(async (port) => {
     // Browsers send no credentials until they have seen a 401, so these are normal.
-    for (let i = 0; i < 5; i++) assert.equal((await getAnon(port, '/')).status, 401);
+    for (let i = 0; i < 5; i++) assert.equal((await getAnon(port, '/')).status, 303);
     assert.equal((await get(port, '/')).status, 200);
   }, { limits: { failedAuthPer15Min: 2 } });
 });
@@ -558,9 +574,221 @@ test('the shared "unknown" client key is never locked out', async () => {
     http.get({ socketPath, path: '/', headers }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); }).on('error', reject);
   });
   try {
-    for (let i = 0; i < 3; i++) assert.equal(await viaSocket({ Authorization: BAD }), 401);
+    for (let i = 0; i < 3; i++) assert.equal(await viaSocket({ Authorization: BAD }), 303);
     assert.equal(await viaSocket({ Authorization: AUTH }), 200);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+// ---- Login form and session cookie ----
+
+const FORM = { 'Content-Type': 'application/x-www-form-urlencoded' };
+const form = (fields) => new URLSearchParams(fields).toString();
+const login = (port, fields, headers = {}) =>
+  request(port, 'POST', '/login', { ...FORM, ...headers }, form(fields));
+const GOOD = { username: 'admin', password: PASSWORD };
+
+function cookieFrom(res) {
+  const set = res.headers['set-cookie'];
+  assert.ok(set && set.length === 1, 'expected one Set-Cookie');
+  return set[0].split(';')[0];
+}
+
+test('login page, its script and the stylesheet need no sign-in', async () => {
+  await withServer(async (port) => {
+    const page = await getAnon(port, '/login.html');
+    assert.equal(page.status, 200);
+    assert.equal(page.headers['cache-control'], 'no-store');
+    assert.match(page.body, /<form method="post" action="\/login"/);
+    assert.doesNotMatch(page.body, /<script(?![^>]*src=)|style=/);
+    assert.equal((await getAnon(port, '/login.js')).status, 200);
+    assert.equal((await getAnon(port, '/style.css')).status, 200);
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+      assert.equal(page.headers[name], value, name);
+    }
+  });
+});
+
+test('good credentials set a session cookie that unlocks pages and the API', async () => {
+  await withServer(async (port) => {
+    const res = await login(port, { ...GOOD, next: '/selftest.html' });
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.location, '/selftest.html');
+    assert.equal(res.headers['cache-control'], 'no-store');
+    const set = res.headers['set-cookie'][0];
+    for (const attr of ['HttpOnly', 'Secure', 'SameSite=Strict', 'Path=/', 'Max-Age=2592000']) {
+      assert.ok(set.includes(attr), `${attr} in ${set}`);
+    }
+    const cookie = cookieFrom(res);
+    assert.equal((await request(port, 'GET', '/', { Cookie: cookie })).status, 200);
+    const api = await request(port, 'GET', LOOKUP, { Cookie: cookie });
+    assert.equal(api.status, 200);
+    assert.equal(api.headers['www-authenticate'], undefined);
+  });
+});
+
+test('bad credentials redirect with error=1, keep next, and set no cookie', async () => {
+  await withServer(async (port) => {
+    const res = await login(port, { username: 'admin', password: 'nope-nope-nope', next: '/selftest.html' });
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.location, '/login.html?error=1&next=%2Fselftest.html');
+    assert.equal(res.headers['set-cookie'], undefined);
+    const noUser = await login(port, { password: PASSWORD });
+    assert.equal(noUser.headers.location, '/login.html?error=1&next=%2F');
+  });
+});
+
+test('repeated bad logins lock the client out, even with the right password', async () => {
+  await withServer(async (port) => {
+    for (let i = 0; i < 3; i++) {
+      const res = await login(port, { username: 'admin', password: 'wrong-password-1' });
+      assert.equal(res.headers.location, '/login.html?error=1&next=%2F');
+    }
+    const locked = await login(port, { ...GOOD, next: '/' });
+    assert.equal(locked.status, 303);
+    assert.equal(locked.headers.location, '/login.html?error=locked&next=%2F');
+    assert.equal(locked.headers['set-cookie'], undefined);
+  }, { limits: { failedAuthPer15Min: 3 } });
+});
+
+test('a locked-out client with a valid session cookie keeps working', async () => {
+  await withServer(async (port) => {
+    const cookie = cookieFrom(await login(port, GOOD));
+    await login(port, { username: 'admin', password: 'wrong-password-1' });
+    assert.equal((await login(port, GOOD)).headers.location, '/login.html?error=locked&next=%2F');
+    assert.equal((await request(port, 'GET', '/', { Cookie: cookie })).status, 200);
+  }, { limits: { failedAuthPer15Min: 1 } });
+});
+
+test('the shared "unknown" key is never locked out on the login form either', async () => {
+  const os = require('node:os');
+  const path = require('node:path');
+  const socketPath = path.join(os.tmpdir(), `dnschecker-login-${process.pid}.sock`);
+  const server = createServer({ password: PASSWORD, resolvers: RESOLVERS, query: fakeQuery([]), limits: { failedAuthPer15Min: 1 } });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const post = (fields) => new Promise((resolve, reject) => {
+    const req = http.request({ socketPath, method: 'POST', path: '/login', headers: FORM }, (res) => {
+      res.resume();
+      res.on('end', () => resolve(res.headers.location));
+    });
+    req.on('error', reject);
+    req.end(form(fields));
+  });
+  try {
+    for (let i = 0; i < 3; i++) assert.match(await post({ username: 'admin', password: 'wrong-password-1' }), /error=1/);
+    assert.equal(await post(GOOD), '/');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('a foreign Origin is refused, a matching or missing Origin is allowed', async () => {
+  await withServer(async (port) => {
+    const foreign = await login(port, GOOD, { Origin: 'https://evil.example' });
+    assert.equal(foreign.status, 403);
+    assert.equal(foreign.headers['set-cookie'], undefined);
+    assert.equal((await login(port, GOOD, { Origin: 'null' })).status, 403);
+    // Browsers send "Origin: null" on same-origin posts under Referrer-Policy: no-referrer.
+    assert.equal((await login(port, GOOD, { Origin: 'null', 'Sec-Fetch-Site': 'cross-site' })).status, 403);
+    assert.equal((await login(port, GOOD, { Origin: 'null', 'Sec-Fetch-Site': 'same-origin' })).status, 303);
+    assert.equal((await login(port, GOOD, { Origin: `http://127.0.0.1:${port}` })).status, 303);
+    // Sec-Fetch-Site decides when present, so a proxy rewriting Host can't break sign-in.
+    assert.equal((await login(port, GOOD, { Origin: 'https://dnschecker.example', 'Sec-Fetch-Site': 'same-origin' })).status, 303);
+    assert.equal((await login(port, GOOD, { Origin: `http://127.0.0.1:${port}`, 'Sec-Fetch-Site': 'same-site' })).status, 403);
+    assert.equal((await login(port, GOOD, { 'Sec-Fetch-Site': 'cross-site' })).status, 403);
+    assert.equal((await request(port, 'POST', '/logout', { Origin: 'https://evil.example' })).status, 403);
+    assert.equal((await request(port, 'POST', '/logout', { Origin: `http://127.0.0.1:${port}` })).status, 303);
+  });
+});
+
+test('unsafe next values are rewritten to /', async () => {
+  await withServer(async (port) => {
+    for (const next of ['//evil.com', '/\\evil.com', 'https://evil.com', 'evil.com', '/a\\b', '/a\r\nb', '']) {
+      const res = await login(port, { ...GOOD, next });
+      assert.equal(res.status, 303);
+      assert.equal(res.headers.location, '/', JSON.stringify(next));
+    }
+    assert.equal((await login(port, { ...GOOD, next: '/selftest.html?a=1' })).headers.location, '/selftest.html?a=1');
+  });
+});
+
+test('oversized login bodies give 413 and other content types 415', async () => {
+  await withServer(async (port) => {
+    const big = await login(port, { ...GOOD, next: '/' + 'a'.repeat(5000) });
+    assert.equal(big.status, 413);
+    const wrong = await request(port, 'POST', '/login', { 'Content-Type': 'application/json' }, JSON.stringify(GOOD));
+    assert.equal(wrong.status, 415);
+    const none = await request(port, 'POST', '/login', {}, form(GOOD));
+    assert.equal(none.status, 415);
+    assert.equal(big.headers['set-cookie'], undefined);
+  });
+});
+
+test('logout clears the cookie and redirects to the login page', async () => {
+  await withServer(async (port) => {
+    const res = await request(port, 'POST', '/logout');
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.location, '/login.html');
+    assert.equal(res.headers['cache-control'], 'no-store');
+    assert.match(res.headers['set-cookie'][0], /^dnschecker_session=; .*Max-Age=0/);
+  });
+});
+
+test('tampered, foreign and empty session cookies are rejected', async () => {
+  await withServer(async (port) => {
+    const cookie = cookieFrom(await login(port, GOOD));
+    const [, value] = cookie.split('=');
+    const parts = value.split('.');
+    const flipped = parts[3].slice(0, -2) + (parts[3].endsWith('AA') ? 'BB' : 'AA');
+    const bad = [
+      `dnschecker_session=${[parts[0], Number(parts[1]) + 1000, parts[2], parts[3]].join('.')}`,
+      `dnschecker_session=${[parts[0], parts[1], parts[2], flipped].join('.')}`,
+      `dnschecker_session=${value}x`,
+      'dnschecker_session=',
+      'dnschecker_session=garbage',
+    ];
+    for (const c of bad) {
+      assert.equal((await request(port, 'GET', '/', { Cookie: c })).status, 303, c);
+      assert.equal((await request(port, 'GET', LOOKUP, { Cookie: c })).status, 401, c);
+    }
+    // A cookie from a server with another password is no good here.
+    await withServer(async (otherPort) => {
+      const foreign = cookieFrom(await login(otherPort, { username: 'admin', password: 'another-long-password' }));
+      assert.equal((await request(port, 'GET', '/', { Cookie: foreign })).status, 303);
+    }, { password: 'another-long-password' });
+  });
+});
+
+test('Basic auth still works for scripts, alongside the cookie', async () => {
+  await withServer(async (port) => {
+    assert.equal((await get(port, LOOKUP)).status, 200);
+    assert.equal((await get(port, '/')).status, 200);
+  });
+});
+
+test('POST /login and /logout are known routes; other methods get 405 with Allow: POST', async () => {
+  await withServer(async (port) => {
+    const res = await request(port, 'GET', '/login', { Authorization: AUTH });
+    assert.equal(res.status, 405);
+    assert.equal(res.headers.allow, 'POST');
+  });
+});
+
+test('the request log never contains credentials or cookies', async () => {
+  const lines = [];
+  const original = console.log;
+  console.log = (...args) => lines.push(args.join(' '));
+  try {
+    await withServer(async (port) => {
+      const res = await login(port, { username: 'admin', password: 'secret-log-check-1' });
+      await request(port, 'GET', '/', { Cookie: cookieFrom(await login(port, GOOD)) });
+      assert.equal(res.status, 303);
+    });
+  } finally {
+    console.log = original;
+  }
+  const log = lines.join('\n');
+  assert.match(log, /POST \/login 303/);
+  assert.doesNotMatch(log, /secret-log-check-1|correct-horse|dnschecker_session|v1\./);
 });
